@@ -1,0 +1,142 @@
+import os
+from dotenv import load_dotenv
+import numpy as np
+from urllib.parse import quote_plus
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+load_dotenv(override=False)
+DATABASE_USERNAME = os.getenv("DATABASE_USERNAME")
+DATABASE_PASSWORD = os.getenv("DATABASE_PASSWORD")
+DATABASE_PORT = os.getenv("DATABASE_PORT")
+DATABASE_HOST = os.getenv("DATABASE_HOST")
+DATABASE_NAME = os.getenv("DATABASE_NAME")
+_DB_PASSWORD_ENCODED = quote_plus(DATABASE_PASSWORD or "")
+
+
+def _env_bool(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name, str(default))
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return default
+
+
+class SettingServer:
+    PROJECT_NAME = "FastAPI CRUD with JWT"
+    DATABASE_URL = f"postgresql+asyncpg://{DATABASE_USERNAME}:{_DB_PASSWORD_ENCODED}@{DATABASE_HOST}:{DATABASE_PORT}/{DATABASE_NAME}"
+    SQL_ECHO = _env_bool("SQL_ECHO", "false")
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+    MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", os.getenv("ACCESS_KEY", "minioadmin"))
+    MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", os.getenv("SECRET_KEY", "minioadmin"))
+    MINIO_SECURE = _env_bool("MINIO_SECURE", "false")
+    MINIO_BUCKET = os.getenv("MINIO_BUCKET", "road-frames")
+    MINIO_URL_EXPIRY_SECONDS = max(60, _env_int("MINIO_URL_EXPIRY_SECONDS", 3600))
+    MINIO_PUBLIC_ENDPOINT = os.getenv("MINIO_PUBLIC_ENDPOINT", MINIO_ENDPOINT)
+    MINIO_PUBLIC_SCHEME = os.getenv("MINIO_PUBLIC_SCHEME", "https" if MINIO_SECURE else "http")
+    MINIO_IMAGE_URL_MODE = os.getenv("MINIO_IMAGE_URL_MODE", "presigned").strip().lower()
+    MINIO_AUTO_SET_PUBLIC_READ = _env_bool("MINIO_AUTO_SET_PUBLIC_READ", "false")
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+    LOG_FILE_NAME = os.getenv("LOG_FILE_NAME", "app.log")
+    LOG_FILE_MAX_BYTES = _env_int("LOG_FILE_MAX_BYTES", 5242880)
+    LOG_FILE_BACKUP_COUNT = _env_int("LOG_FILE_BACKUP_COUNT", 5)
+    LOG_TO_CONSOLE = _env_bool("LOG_TO_CONSOLE", "false")
+    CHAT_MAX_SHORT_TERM_MESSAGES = max(6, _env_int("CHAT_MAX_SHORT_TERM_MESSAGES", 24))
+    CHAT_LONG_TERM_MEMORY_LIMIT = max(1, _env_int("CHAT_LONG_TERM_MEMORY_LIMIT", 3))
+    CHAT_MEMORY_DB_URI = os.getenv(
+        "CHAT_MEMORY_DB_URI",
+        DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://"),
+    )
+    OPENCV_VIDEOIO_PRIORITY_MSMF = os.getenv("OPENCV_VIDEOIO_PRIORITY_MSMF", "0")
+    OPENCV_VIDEOIO_PRIORITY_DSHOW = os.getenv("OPENCV_VIDEOIO_PRIORITY_DSHOW", "1")
+    KMP_DUPLICATE_LIB_OK = os.getenv("KMP_DUPLICATE_LIB_OK", "TRUE")
+    # DATABASE_URL = 'postgresql+psycopg_async://neondb_owner:npg_JEOMv5puo3wz@ep-mute-glade-ad2qnbo9-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require'
+    JWT_SECRET = os.getenv("JWT_SECRET_KEY")
+    JWT_ALGORITHM = os.getenv("JWT_ALGORITHM")
+    ACCESS_TOKEN_EXPIRE_DAYS = int(os.getenv("ACCESS_TOKEN_EXPIRE_DAYS"))
+
+class SettingMetricTransport:
+    REGIONS = [
+        np.array([[0, 400], [190, 190], [440, 190], [600, 400]]),
+        np.array([[0, 400], [120, 190], [480, 190], [600, 400]]),
+        np.array([[0, 400], [0, 180], [150, 70], [480, 70], [600, 260], [600, 400]]),
+        np.array([[140, 400], [400, 200], [550, 200], [530, 400]]),
+        np.array([[150, 400], [300, 200], [580, 200], [600, 400]]),
+    ]
+
+    PATH_VIDEOS = [
+        os.path.join(BASE_DIR, "video_test", "Văn Quán.mp4"),
+        os.path.join(BASE_DIR, "video_test", "Nguyễn Văn Trỗi.mp4"),
+        os.path.join(BASE_DIR, "video_test", "Nguyễn Trãi.mp4"),
+        os.path.join(BASE_DIR, "video_test", "Ngã Tư Sở.mp4"),
+        os.path.join(BASE_DIR, "video_test", "Đường Láng.mp4"),
+    ]
+
+    METER_PER_PIXELS = [
+                        0.034,
+                        0.036,
+                        0.018,
+                        0.066,
+                        0.029
+                        ]
+    MODELS_PATH = os.path.join(BASE_DIR, 'ai_models', 'model N', 'openvino models', 'prune_40%_int8_openvino_model')
+
+    DEVICE = 'cpu'
+
+class SettingChatBot:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    LLM = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview",
+                                temperature=0.4, 
+                                max_output_tokens=1024
+                                )
+    # Dùng ollama local api llm
+    
+    # from langchain_openai import ChatOpenAI
+    # LLM = ChatOpenAI(
+    #     model="gemma4:e4b",
+    #     base_url="http://159.48.242.6:21209/v1",
+    #     api_key="dummy"
+    # )   
+
+
+class SettingNetwork:
+    BASE_URL_API = "http://localhost:8000"
+    URL_FRONTEND = "http://localhost:5173"
+
+settings_server = SettingServer()
+settings_metric_transport = SettingMetricTransport()
+settings_chat_bot = SettingChatBot()
+settings_network = SettingNetwork()
+setting_chatbot = SettingChatBot()
+
+# ================= Traffic Thresholds (per-road) =================
+# v: average speed threshold (km/h) - >= v => fast, else slow
+# c1: vehicle count threshold for busy
+# c2: vehicle count threshold for congested
+
+from typing import Dict, TypedDict
+
+
+class RoadThreshold(TypedDict):
+    v: int
+    c1: int
+    c2: int
+
+
+TRAFFIC_THRESHOLDS: Dict[str, RoadThreshold] = {
+    "Đường Láng": {"v": 18, "c1": 12, "c2": 20},
+    "Ngã Tư Sở": {"v": 19, "c1": 35, "c2": 47},
+    "Nguyễn Trãi": {"v": 18, "c1": 12, "c2": 22},
+    "Văn Quán": {"v": 17, "c1": 8, "c2": 15},
+    "Nguyễn Văn Trỗi": {"v": 18, "c1": 12, "c2": 23},
+}
+
+DEFAULT_THRESHOLD: RoadThreshold = {"v": 15, "c1": 15, "c2": 25}
+
+
