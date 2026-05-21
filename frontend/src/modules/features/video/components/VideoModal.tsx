@@ -36,18 +36,15 @@ const VideoModal = ({
       setFallbackSrc("");
       return;
     }
-
-    // Refresh every 400ms (approx. 2.5 FPS)
     const interval = setInterval(() => {
       setFallbackSrc(`${endpoints.getFrameNoAuth(roadName)}?t=${Date.now()}`);
     }, 400);
-
     return () => clearInterval(interval);
   }, [isOpen, stream, frame, roadName]);
 
   useEffect(() => {
     const node = videoRef.current;
-    if (!node || !stream) {
+    if (!node) {
       return;
     }
 
@@ -144,9 +141,8 @@ const VideoModal = ({
                 {frame ? (
                   <img
                     src={frame}
-                    alt={`Traffic monitoring stream for ${roadName}`}
+                    alt={`Camera ${roadName}`}
                     className="max-w-full max-h-[50vh] sm:max-h-[60vh] lg:max-h-[70vh] object-contain rounded-lg shadow-lg"
-                    style={{ display: "block" }}
                   />
                 ) : stream ? (
                   <video
@@ -159,9 +155,8 @@ const VideoModal = ({
                 ) : fallbackSrc ? (
                   <img
                     src={fallbackSrc}
-                    alt={`Traffic monitoring stream for ${roadName} (Fallback)`}
+                    alt={`Camera ${roadName}`}
                     className="max-w-full max-h-[50vh] sm:max-h-[60vh] lg:max-h-[70vh] object-contain rounded-lg shadow-lg"
-                    style={{ display: "block" }}
                     onError={() => {}}
                   />
                 ) : (
@@ -190,146 +185,92 @@ const VideoModal = ({
                     Tình Trạng
                   </h4>
                   <div className="space-y-2">
-                    {/* Đánh giá về số lượng phương tiện */}
                     <div className="p-2 bg-gray-50 dark:bg-gray-800 rounded">
                       {(() => {
-                        // Prefer backend-provided label
-                        const densityFromBackend = (trafficData as any)
-                          ?.density_status;
+                        const densityFromBackend = (trafficData as any)?.density_status;
                         if (densityFromBackend) {
                           if (densityFromBackend === "Tắc nghẽn") {
                             return (
                               <div className="flex items-center justify-between">
-                                <span className="text-xs text-gray-600 dark:text-gray-400">
-                                  Mật độ:
-                                </span>
-                                <span className="font-medium text-xs sm:text-sm bg-red-100 dark:bg-red-900 px-2 py-1 rounded text-red-700 dark:text-red-300">
-                                  {densityFromBackend}
-                                </span>
+                                <span className="text-xs text-gray-600 dark:text-gray-400">Mật độ:</span>
+                                <span className="font-medium text-xs sm:text-sm bg-red-100 dark:bg-red-900 px-2 py-1 rounded text-red-700 dark:text-red-300">{densityFromBackend}</span>
                               </div>
                             );
                           }
                           if (densityFromBackend === "Đông đúc") {
                             return (
                               <div className="flex items-center justify-between">
-                                <span className="text-xs text-gray-600 dark:text-gray-400">
-                                  Mật độ:
-                                </span>
-                                <span className="font-medium text-xs sm:text-sm bg-yellow-100 dark:bg-yellow-900 px-2 py-1 rounded text-yellow-700 dark:text-yellow-300">
-                                  {densityFromBackend}
-                                </span>
+                                <span className="text-xs text-gray-600 dark:text-gray-400">Mật độ:</span>
+                                <span className="font-medium text-xs sm:text-sm bg-yellow-100 dark:bg-yellow-900 px-2 py-1 rounded text-yellow-700 dark:text-yellow-300">{densityFromBackend}</span>
                               </div>
                             );
                           }
                           return (
                             <div className="flex items-center justify-between">
-                              <span className="text-xs text-gray-600 dark:text-gray-400">
-                                Mật độ:
-                              </span>
-                              <span className="font-medium text-xs sm:text-sm bg-green-100 dark:bg-green-900 px-2 py-1 rounded text-green-700 dark:text-green-300">
-                                {densityFromBackend}
-                              </span>
+                              <span className="text-xs text-gray-600 dark:text-gray-400">Mật độ:</span>
+                              <span className="font-medium text-xs sm:text-sm bg-green-100 dark:bg-green-900 px-2 py-1 rounded text-green-700 dark:text-green-300">{densityFromBackend}</span>
                             </div>
                           );
                         }
-
-                        // Fallback: compute locally if backend not available
                         const threshold = getThresholdForRoad(roadName);
-                        const totalVehicles =
-                          (trafficData?.count_car || 0) +
-                          (trafficData?.count_motor || 0);
+                        const totalVehicles = (trafficData?.count_car || 0) + (trafficData?.count_motor || 0);
                         if (totalVehicles > threshold.c2) {
                           return (
                             <div className="flex items-center justify-between">
-                              <span className="text-xs text-gray-600 dark:text-gray-400">
-                                Mật độ:
-                              </span>
-                              <span className="font-medium text-xs sm:text-sm bg-red-100 dark:bg-red-900 px-2 py-1 rounded text-red-700 dark:text-red-300">
-                                Tắc nghẽn
-                              </span>
+                              <span className="text-xs text-gray-600 dark:text-gray-400">Mật độ:</span>
+                              <span className="font-medium text-xs sm:text-sm bg-red-100 dark:bg-red-900 px-2 py-1 rounded text-red-700 dark:text-red-300">Tắc nghẽn</span>
                             </div>
                           );
                         } else if (totalVehicles > threshold.c1) {
                           return (
                             <div className="flex items-center justify-between">
-                              <span className="text-xs text-gray-600 dark:text-gray-400">
-                                Mật độ:
-                              </span>
-                              <span className="font-medium text-xs sm:text-sm bg-yellow-100 dark:bg-yellow-900 px-2 py-1 rounded text-yellow-700 dark:text-yellow-300">
-                                Đông đúc
-                              </span>
+                              <span className="text-xs text-gray-600 dark:text-gray-400">Mật độ:</span>
+                              <span className="font-medium text-xs sm:text-sm bg-yellow-100 dark:bg-yellow-900 px-2 py-1 rounded text-yellow-700 dark:text-yellow-300">Đông đúc</span>
                             </div>
                           );
                         }
                         return (
                           <div className="flex items-center justify-between">
-                            <span className="text-xs text-gray-600 dark:text-gray-400">
-                              Mật độ:
-                            </span>
-                            <span className="font-medium text-xs sm:text-sm bg-green-100 dark:bg-green-900 px-2 py-1 rounded text-green-700 dark:text-green-300">
-                              Thông thoáng
-                            </span>
+                            <span className="text-xs text-gray-600 dark:text-gray-400">Mật độ:</span>
+                            <span className="font-medium text-xs sm:text-sm bg-green-100 dark:bg-green-900 px-2 py-1 rounded text-green-700 dark:text-green-300">Thông thoáng</span>
                           </div>
                         );
                       })()}
                     </div>
 
-                    {/* Đánh giá về tốc độ */}
                     <div className="p-2 bg-gray-50 dark:bg-gray-800 rounded">
                       {(() => {
-                        const speedFromBackend = (trafficData as any)
-                          ?.speed_status;
+                        const speedFromBackend = (trafficData as any)?.speed_status;
                         if (speedFromBackend) {
                           if (speedFromBackend === "Nhanh chóng") {
                             return (
                               <div className="flex items-center justify-between">
-                                <span className="text-xs text-gray-600 dark:text-gray-400">
-                                  Vận tốc:
-                                </span>
-                                <span className="font-medium text-xs sm:text-sm bg-green-100 dark:bg-green-900 px-2 py-1 rounded text-green-700 dark:text-green-300">
-                                  {speedFromBackend}
-                                </span>
+                                <span className="text-xs text-gray-600 dark:text-gray-400">Vận tốc:</span>
+                                <span className="font-medium text-xs sm:text-sm bg-green-100 dark:bg-green-900 px-2 py-1 rounded text-green-700 dark:text-green-300">{speedFromBackend}</span>
                               </div>
                             );
                           }
                           return (
                             <div className="flex items-center justify-between">
-                              <span className="text-xs text-gray-600 dark:text-gray-400">
-                                Vận tốc:
-                              </span>
-                              <span className="font-medium text-xs sm:text-sm bg-orange-100 dark:bg-orange-900 px-2 py-1 rounded text-orange-700 dark:text-orange-300">
-                                {speedFromBackend}
-                              </span>
+                              <span className="text-xs text-gray-600 dark:text-gray-400">Vận tốc:</span>
+                              <span className="font-medium text-xs sm:text-sm bg-orange-100 dark:bg-orange-900 px-2 py-1 rounded text-orange-700 dark:text-orange-300">{speedFromBackend}</span>
                             </div>
                           );
                         }
-
-                        // Fallback
                         const threshold = getThresholdForRoad(roadName);
-                        const avgSpeed =
-                          ((trafficData?.speed_car || 0) +
-                            (trafficData?.speed_motor || 0)) /
-                          2;
+                        const avgSpeed = ((trafficData?.speed_car || 0) + (trafficData?.speed_motor || 0)) / 2;
                         if (avgSpeed >= threshold.v) {
                           return (
                             <div className="flex items-center justify-between">
-                              <span className="text-xs text-gray-600 dark:text-gray-400">
-                                Vận tốc:
-                              </span>
-                              <span className="font-medium text-xs sm:text-sm bg-green-100 dark:bg-green-900 px-2 py-1 rounded text-green-700 dark:text-green-300">
-                                Nhanh chóng
-                              </span>
+                              <span className="text-xs text-gray-600 dark:text-gray-400">Vận tốc:</span>
+                              <span className="font-medium text-xs sm:text-sm bg-green-100 dark:bg-green-900 px-2 py-1 rounded text-green-700 dark:text-green-300">Nhanh chóng</span>
                             </div>
                           );
                         }
                         return (
                           <div className="flex items-center justify-between">
-                            <span className="text-xs text-gray-600 dark:text-gray-400">
-                              Vận tốc:
-                            </span>
-                            <span className="font-medium text-xs sm:text-sm bg-orange-100 dark:bg-orange-900 px-2 py-1 rounded text-orange-700 dark:text-orange-300">
-                              Chậm chạp
-                            </span>
+                            <span className="text-xs text-gray-600 dark:text-gray-400">Vận tốc:</span>
+                            <span className="font-medium text-xs sm:text-sm bg-orange-100 dark:bg-orange-900 px-2 py-1 rounded text-orange-700 dark:text-orange-300">Chậm chạp</span>
                           </div>
                         );
                       })()}
@@ -345,20 +286,12 @@ const VideoModal = ({
                   </h4>
                   <div className="space-y-1.5 sm:space-y-2">
                     <div className="flex justify-between items-center p-1.5 sm:p-2 bg-gray-50 dark:bg-gray-800 rounded">
-                      <span className="text-xs text-gray-600 dark:text-gray-400">
-                        Số lượng:
-                      </span>
-                      <span className="font-medium text-xs sm:text-sm bg-blue-100 dark:bg-blue-900 px-2 py-1 rounded text-blue-700 dark:text-blue-300">
-                        {trafficData?.count_car || 0}
-                      </span>
+                      <span className="text-xs text-gray-600 dark:text-gray-400">Số lượng:</span>
+                      <span className="font-medium text-xs sm:text-sm bg-blue-100 dark:bg-blue-900 px-2 py-1 rounded text-blue-700 dark:text-blue-300">{trafficData?.count_car || 0}</span>
                     </div>
                     <div className="flex justify-between items-center p-1.5 sm:p-2 bg-gray-50 dark:bg-gray-800 rounded">
-                      <span className="text-xs text-gray-600 dark:text-gray-400">
-                        Vận tốc:
-                      </span>
-                      <span className="font-medium text-xs sm:text-sm bg-green-100 dark:bg-green-900 px-2 py-1 rounded text-green-700 dark:text-green-300">
-                        {trafficData?.speed_car || 0} km/h
-                      </span>
+                      <span className="text-xs text-gray-600 dark:text-gray-400">Vận tốc:</span>
+                      <span className="font-medium text-xs sm:text-sm bg-green-100 dark:bg-green-900 px-2 py-1 rounded text-green-700 dark:text-green-300">{trafficData?.speed_car || 0} km/h</span>
                     </div>
                   </div>
                 </div>
@@ -371,20 +304,12 @@ const VideoModal = ({
                   </h4>
                   <div className="space-y-1.5 sm:space-y-2">
                     <div className="flex justify-between items-center p-1.5 sm:p-2 bg-gray-50 dark:bg-gray-800 rounded">
-                      <span className="text-xs text-gray-600 dark:text-gray-400">
-                        Số lượng:
-                      </span>
-                      <span className="font-medium text-xs sm:text-sm bg-purple-100 dark:bg-purple-900 px-2 py-1 rounded text-purple-700 dark:text-purple-300">
-                        {trafficData?.count_motor || 0}
-                      </span>
+                      <span className="text-xs text-gray-600 dark:text-gray-400">Số lượng:</span>
+                      <span className="font-medium text-xs sm:text-sm bg-purple-100 dark:bg-purple-900 px-2 py-1 rounded text-purple-700 dark:text-purple-300">{trafficData?.count_motor || 0}</span>
                     </div>
                     <div className="flex justify-between items-center p-1.5 sm:p-2 bg-gray-50 dark:bg-gray-800 rounded">
-                      <span className="text-xs text-gray-600 dark:text-gray-400">
-                        Vận tốc:
-                      </span>
-                      <span className="font-medium text-xs sm:text-sm bg-green-100 dark:bg-green-900 px-2 py-1 rounded text-green-700 dark:text-green-300">
-                        {trafficData?.speed_motor || 0} km/h
-                      </span>
+                      <span className="text-xs text-gray-600 dark:text-gray-400">Vận tốc:</span>
+                      <span className="font-medium text-xs sm:text-sm bg-green-100 dark:bg-green-900 px-2 py-1 rounded text-green-700 dark:text-green-300">{trafficData?.speed_motor || 0} km/h</span>
                     </div>
                   </div>
                 </div>

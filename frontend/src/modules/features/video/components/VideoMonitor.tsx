@@ -66,64 +66,30 @@ const StreamVideo = ({ stream, frame, roadName, className }: StreamVideoProps) =
 
   useEffect(() => {
     const node = videoRef.current;
-    if (!node || !stream) {
-      return;
-    }
-
-    if (node.srcObject !== stream) {
-      node.srcObject = stream;
-    }
-
-    if (stream) {
-      void node.play().catch(() => {
-        // Ignore autoplay errors; user interaction will resume playback.
-      });
-    }
+    if (!node || !stream) return;
+    if (node.srcObject !== stream) node.srcObject = stream;
+    void node.play().catch(() => {});
   }, [stream]);
 
-  // Premium HTTP GET polling fallback if WebRTC and WebSocket both fail/disconnect
+  // HTTP polling fallback khi cả WebRTC và WebSocket đều không có
   useEffect(() => {
     if (stream || frame) {
       setFallbackSrc("");
       return;
     }
-
-    // Refresh every 400ms (approx. 2.5 FPS) to keep overhead low while ensuring real-time traffic view
     const interval = setInterval(() => {
       setFallbackSrc(`${endpoints.getFrameNoAuth(roadName)}?t=${Date.now()}`);
     }, 400);
-
     return () => clearInterval(interval);
   }, [stream, frame, roadName]);
 
   if (frame) {
-    return (
-      <img
-        src={frame}
-        alt="Traffic Monitoring Stream"
-        className={`${className} object-contain`}
-        style={{ width: "100%", height: "100%" }}
-      />
-    );
+    return <img src={frame} alt="Traffic stream" className={`${className} object-contain`} />;
   }
-
   if (fallbackSrc) {
-    return (
-      <img
-        src={fallbackSrc}
-        alt="Traffic Monitoring Stream (Fallback)"
-        className={`${className} object-contain`}
-        style={{ width: "100%", height: "100%" }}
-        onError={() => {
-          // Hide or ignore fallback load errors silently
-        }}
-      />
-    );
+    return <img src={fallbackSrc} alt="Traffic stream" className={`${className} object-contain`} onError={() => {}} />;
   }
-
-  return (
-    <video ref={videoRef} autoPlay playsInline muted className={className} />
-  );
+  return <video ref={videoRef} autoPlay playsInline muted className={className} />;
 };
 
 const VideoMonitor = ({
@@ -241,17 +207,29 @@ const VideoMonitor = ({
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div
-            className={`grid gap-3 sm:gap-4 ${isFullscreen
-                ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-                : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
-              }`}
-          >
-            {allowedRoads.map((road) => (
-              <div key={road} className="space-y-2 sm:space-y-3">
-                <Skeleton className="aspect-[3/2] w-full max-w-sm mx-auto rounded-lg" />
-                <Skeleton className="h-3 sm:h-4 w-3/4" />
-                <Skeleton className="h-3 sm:h-4 w-1/2" />
+          <div className={`grid gap-3 sm:gap-4 ${isFullscreen ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"}`}>
+            {(allowedRoads.length > 0 ? allowedRoads : [1,2,3,4,5]).map((road) => (
+              <div key={road} className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                {/* Shimmer video area */}
+                <div className="aspect-[3/2] bg-gradient-to-r from-gray-200 via-gray-100 to-gray-200 dark:from-gray-800 dark:via-gray-700 dark:to-gray-800 animate-pulse relative overflow-hidden">
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Video className="h-10 w-10 text-gray-300 dark:text-gray-600" />
+                  </div>
+                  {/* Shimmer sweep */}
+                  <div className="absolute inset-0 -translate-x-full animate-[shimmer_1.5s_infinite] bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+                </div>
+                {/* Info skeleton */}
+                <div className="bg-white dark:bg-gray-900 p-3 space-y-2">
+                  <Skeleton className="h-4 w-3/4" />
+                  <div className="flex gap-2">
+                    <Skeleton className="h-5 w-20" />
+                    <Skeleton className="h-5 w-20" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Skeleton className="h-12 w-full rounded-lg" />
+                    <Skeleton className="h-12 w-full rounded-lg" />
+                  </div>
+                </div>
               </div>
             ))}
           </div>
@@ -333,18 +311,12 @@ const VideoMonitor = ({
                 >
                   {/* Video Frame (responsive) */}
                   <div className="relative w-full max-w-sm mx-auto aspect-[3/2] bg-gray-100 dark:bg-gray-800 overflow-hidden">
-                    {streamEntry?.stream || frameData?.[roadName]?.frame || roadName ? (
-                      <StreamVideo
-                        stream={streamEntry?.stream || null}
-                        frame={frameData?.[roadName]?.frame}
-                        roadName={roadName}
-                        className="w-full h-full object-contain block"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        <Video className="h-8 w-8 sm:h-12 sm:w-12 text-gray-400" />
-                      </div>
-                    )}
+                    <StreamVideo
+                      stream={streamEntry?.stream || null}
+                      frame={frameData?.[roadName]?.frame}
+                      roadName={roadName}
+                      className="w-full h-full object-contain block"
+                    />
 
                     {/* Click to expand hint */}
                     <div className="absolute inset-0 bg-black/0 hover:bg-black/10 transition-colors duration-200 flex items-center justify-center opacity-0 hover:opacity-100">
@@ -444,7 +416,6 @@ const VideoMonitor = ({
         </div>
       </CardContent>
 
-      {/* Video Modal */}
       <VideoModal
         isOpen={modalOpen && !!modalRoadName}
         onClose={() => {
@@ -452,12 +423,8 @@ const VideoMonitor = ({
           setModalRoadName("");
         }}
         roadName={modalRoadName}
-        stream={
-          modalRoadName ? streamData[modalRoadName]?.stream || null : null
-        }
-        frame={
-          modalRoadName ? frameData?.[modalRoadName]?.frame : undefined
-        }
+        stream={modalRoadName ? streamData[modalRoadName]?.stream || null : null}
+        frame={modalRoadName ? frameData?.[modalRoadName]?.frame : undefined}
         trafficData={modalRoadName ? trafficData[modalRoadName] : undefined}
       />
     </Card>
