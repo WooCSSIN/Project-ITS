@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/ui/card";
 import { Badge } from "@/ui/badge";
 import { Skeleton } from "@/ui/skeleton";
@@ -11,6 +11,8 @@ import {
   CheckCircle,
   Clock,
   Gauge,
+  Activity,
+  Radio,
 } from "lucide-react";
 import VideoMonitor from "../../video/components/VideoMonitor";
 import { motion, AnimatePresence } from "framer-motion";
@@ -80,101 +82,47 @@ const TrafficDashboard = () => {
   }, []);
 
   // Use WebSocket for traffic data
-  const { trafficData, isAnyConnected: isTrafficConnected } = useMultipleTrafficInfo(allowedRoads);
+  const { trafficData, isAnyConnected } = useMultipleTrafficInfo(allowedRoads);
   const { streamData, connections: streamConnections } =
     useMultipleWebRTCFrameStreams(allowedRoads);
   const { frameData, connections: frameConnections } =
     useMultipleFrameStreams(allowedRoads);
 
-  // Combine connection states of WebRTC and WebSocket Frame Streams
+  // Combine WebRTC + WebSocket frame connections
   const combinedConnections: Record<string, boolean> = {};
-  allowedRoads.forEach((road: string) => {
+  allowedRoads.forEach((road) => {
     combinedConnections[road] = !!(streamConnections[road] || frameConnections[road]);
   });
 
-  const isAnyConnected = isTrafficConnected || Object.values(combinedConnections).some(Boolean);
   const loading = !isAnyConnected;
 
-  // Real-time Traffic Alert Engine (replaces Telegram Alert with Premium local Web Hub)
+  // Alert engine: phát hiện thay đổi trạng thái và thông báo
   useEffect(() => {
     if (allowedRoads.length === 0 || Object.keys(trafficData).length === 0) return;
-
     allowedRoads.forEach((road: string) => {
-      const data = trafficData[road];
-      if (!data) return;
-
+      if (!trafficData[road]) return;
       const { status } = getTrafficStatus(road);
       const prevStatus = prevStatusesRef.current[road];
-
       if (prevStatus !== undefined && prevStatus !== status) {
-        const timeStr = new Date().toLocaleTimeString("vi-VN", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        });
-
+        const timeStr = new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        const data = trafficData[road];
         if (status === "congested") {
-          const msg = `Phát hiện ùn tắc nghiêm trọng! Ô tô: ${data.count_car}, Xe máy: ${data.count_motor}. Vận tốc trung bình: ${((data.speed_car + data.speed_motor) / 2).toFixed(1)} km/h.`;
-          
-          // Trigger Premium rich Toast Alert
-          toast.error(`🚨 Tuyến đường ${road} đang tắc nghẽn!`, {
-            description: msg,
-            duration: 8000,
-          });
-
-          // Add to Alert Center
-          setAlerts((prev: AlertItem[]) => [
-            {
-              id: `${road}-${Date.now()}`,
-              roadName: road,
-              message: msg,
-              timestamp: timeStr,
-              type: "congested",
-            },
-            ...prev.slice(0, 9), // Cap at 10 items
-          ]);
+          const msg = `Ô tô: ${data.count_car}, Xe máy: ${data.count_motor}. Tốc độ TB: ${((data.speed_car + data.speed_motor) / 2).toFixed(1)} km/h.`;
+          toast.error(`🚨 ${road} đang tắc nghẽn!`, { description: msg, duration: 8000 });
+          setAlerts((prev) => [{ id: `${road}-${Date.now()}`, roadName: road, message: msg, timestamp: timeStr, type: "congested" }, ...prev.slice(0, 9)]);
         } else if (status === "busy" && prevStatus === "clear") {
-          const msg = `Mật độ giao thông đang tăng cao. Hãy chú ý quan sát.`;
-          
-          toast.warning(`⚠️ Tuyến đường ${road} bắt đầu đông đúc`, {
-            description: msg,
-            duration: 5000,
-          });
-
-          setAlerts((prev: AlertItem[]) => [
-            {
-              id: `${road}-${Date.now()}`,
-              roadName: road,
-              message: msg,
-              timestamp: timeStr,
-              type: "busy",
-            },
-            ...prev.slice(0, 9),
-          ]);
+          const msg = `Mật độ giao thông đang tăng cao.`;
+          toast.warning(`⚠️ ${road} bắt đầu đông đúc`, { description: msg, duration: 5000 });
+          setAlerts((prev) => [{ id: `${road}-${Date.now()}`, roadName: road, message: msg, timestamp: timeStr, type: "busy" }, ...prev.slice(0, 9)]);
         } else if (status === "clear" && prevStatus === "congested") {
-          const msg = `Tình trạng ùn tắc đã kết thúc. Giao thông thông thoáng trở lại.`;
-          
-          toast.success(`✅ Tuyến đường ${road} đã thông thoáng`, {
-            description: msg,
-            duration: 5000,
-          });
-
-          setAlerts((prev: AlertItem[]) => [
-            {
-              id: `${road}-${Date.now()}`,
-              roadName: road,
-              message: msg,
-              timestamp: timeStr,
-              type: "clear",
-            },
-            ...prev.slice(0, 9),
-          ]);
+          const msg = `Giao thông đã thông thoáng trở lại.`;
+          toast.success(`✅ ${road} đã thông thoáng`, { description: msg, duration: 5000 });
+          setAlerts((prev) => [{ id: `${road}-${Date.now()}`, roadName: road, message: msg, timestamp: timeStr, type: "clear" }, ...prev.slice(0, 9)]);
         }
       }
-
-      // Update ref
       prevStatusesRef.current[road] = status;
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trafficData, allowedRoads]);
 
   const getTrafficStatus = (roadName: string) => {
@@ -220,27 +168,61 @@ const TrafficDashboard = () => {
 
   const getStatusText = (status: string) => {
     switch (status) {
-      case "congested":
-        return "Tắc nghẽn";
-      case "busy":
-        return "Đông đúc";
-      case "clear":
-        return "Thông thoáng";
-      default:
-        return "Không rõ";
+      case "congested": return "Tắc nghẽn";
+      case "busy": return "Đông đúc";
+      case "clear": return "Thông thoáng";
+      default: return "Không rõ";
     }
   };
 
-  return (
-    <div className="min-h-screen pt-4 px-2 sm:px-4 space-y-4 sm:space-y-6">
-      {/* Connection Status Banner - REMOVED, now inside VideoMonitor */}
+  // Summary stats
+  const stats = useMemo(() => {
+    const totalVehicles = allowedRoads.reduce((sum, road) => {
+      const d = trafficData[road];
+      return sum + (d ? (d.count_car + d.count_motor) : 0);
+    }, 0);
+    const activeRoads = allowedRoads.filter((r) => trafficData[r]).length;
+    const congestedCount = allowedRoads.filter((r) => getTrafficStatus(r).status === "congested").length;
+    return { totalVehicles, activeRoads, congestedCount };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trafficData, allowedRoads]);
 
-      {/* Main Content */}
-      <div className="space-y-4 sm:space-y-6">
-        <div
-          className={`grid gap-4 sm:gap-6 ${localFullscreen ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-4"
-            }`}
-        >
+  return (
+    <div className="space-y-4 sm:space-y-5 pt-2">
+      {/* ── Summary Stats Bar ── */}
+      {!loading && allowedRoads.length > 0 && (
+        <div className="grid grid-cols-3 gap-3">
+          <div className="flex items-center gap-3 rounded-xl bg-white/80 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 px-4 py-3 shadow-sm">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+              <Activity className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Tổng xe</p>
+              <p className="text-xl font-bold text-slate-900 dark:text-white tabular-nums">{stats.totalVehicles}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 rounded-xl bg-white/80 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 px-4 py-3 shadow-sm">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
+              <Radio className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Tuyến hoạt động</p>
+              <p className="text-xl font-bold text-slate-900 dark:text-white tabular-nums">{stats.activeRoads}<span className="text-sm font-normal text-slate-400">/{allowedRoads.length}</span></p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 rounded-xl bg-white/80 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 px-4 py-3 shadow-sm">
+            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${stats.congestedCount > 0 ? "bg-red-100 dark:bg-red-900/30" : "bg-slate-100 dark:bg-slate-800"}`}>
+              <AlertTriangle className={`h-4 w-4 ${stats.congestedCount > 0 ? "text-red-600 dark:text-red-400" : "text-slate-400"}`} />
+            </div>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Cảnh báo</p>
+              <p className={`text-xl font-bold tabular-nums ${stats.congestedCount > 0 ? "text-red-600 dark:text-red-400" : "text-slate-900 dark:text-white"}`}>{stats.congestedCount}</p>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Main grid */}
+      <div className={`grid gap-4 sm:gap-5 ${localFullscreen ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-4"}`}>
           {/* Video Monitoring */}
           <div className={localFullscreen ? "col-span-1" : "col-span-3"}>
             <VideoMonitor
@@ -353,59 +335,55 @@ const TrafficDashboard = () => {
                 </CardContent>
               </Card>
 
-              {/* AI Traffic Alert Hub (Premium replacement for Telegram) */}
-              <Card className="shadow-lg border border-stone-300 dark:border-zinc-700 bg-white/95 dark:bg-zinc-900/95 mt-4">
-                <CardHeader className="py-2.5 bg-transparent border-b border-stone-200 dark:border-zinc-700 flex flex-row items-center justify-between">
-                  <CardTitle className="flex items-center space-x-2 text-base text-zinc-900 dark:text-zinc-100 font-semibold">
-                    <AlertTriangle className="h-5 w-5 text-rose-600 dark:text-rose-500 animate-pulse" />
-                    <span>Trung Tâm Cảnh Báo AI</span>
+              {/* Panel Cảnh Báo Ùn Tắc */}
+              <Card className="shadow-lg border border-stone-300 dark:border-zinc-700 bg-white/95 dark:bg-zinc-900/95">
+                <CardHeader className="py-2 bg-transparent border-b border-stone-200 dark:border-zinc-700 flex flex-row items-center justify-between">
+                  <CardTitle className="flex items-center space-x-2 text-base text-zinc-900 dark:text-zinc-100">
+                    <AlertTriangle className="h-5 w-5 text-amber-500" />
+                    <span>Cảnh Báo Ùn Tắc</span>
                   </CardTitle>
                   {alerts.length > 0 && (
-                    <Badge variant="destructive" className="animate-bounce px-1.5 py-0 text-[10px] h-4">
-                      Mới
+                    <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-4">
+                      {alerts.length}
                     </Badge>
                   )}
                 </CardHeader>
                 <CardContent className="px-4 py-3 max-h-60 overflow-y-auto overscroll-contain">
-                  <div className="space-y-3">
-                    {alerts.length === 0 ? (
-                      <div className="text-center py-6">
-                        <CheckCircle className="h-8 w-8 text-emerald-500 mx-auto mb-2 opacity-75" />
-                        <p className="text-zinc-500 dark:text-zinc-400 text-xs font-medium">
-                          Hệ thống vận hành an toàn.
-                          <br />
-                          Chưa ghi nhận sự cố ùn tắc.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {alerts.map((item: AlertItem) => (
-                          <div
-                            key={item.id}
-                            className={`p-2.5 rounded-lg border text-xs transition-all ${
-                              item.type === "congested"
-                                ? "bg-red-50 dark:bg-rose-950/20 border-red-200 dark:border-rose-900/50 text-red-800 dark:text-rose-300"
-                                : item.type === "busy"
-                                ? "bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/50 text-amber-800 dark:text-amber-300"
-                                : "bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900/50 text-emerald-800 dark:text-emerald-300"
-                            }`}
-                          >
-                            <div className="flex justify-between items-center mb-1 font-semibold">
-                              <span>Tuyến: {item.roadName}</span>
-                              <span className="text-[10px] opacity-75">{item.timestamp}</span>
-                            </div>
-                            <p className="leading-relaxed opacity-90">{item.message}</p>
+                  {alerts.length === 0 ? (
+                    <div className="text-center py-6">
+                      <CheckCircle className="h-8 w-8 text-emerald-500 mx-auto mb-2 opacity-75" />
+                      <p className="text-gray-500 dark:text-gray-400 text-xs font-medium">
+                        Hệ thống vận hành bình thường.
+                        <br />Chưa ghi nhận sự cố ùn tắc.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {alerts.map((item) => (
+                        <div
+                          key={item.id}
+                          className={`p-2.5 rounded-lg border text-xs ${
+                            item.type === "congested"
+                              ? "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800/50 text-red-700 dark:text-red-400"
+                              : item.type === "busy"
+                              ? "bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800/50 text-amber-700 dark:text-amber-400"
+                              : "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800/50 text-emerald-700 dark:text-emerald-400"
+                          }`}
+                        >
+                          <div className="flex justify-between items-center mb-1 font-semibold">
+                            <span>{item.roadName}</span>
+                            <span className="text-[10px] opacity-70 font-normal">{item.timestamp}</span>
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                          <p className="opacity-90 leading-relaxed">{item.message}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
           )}
         </div>
-      </div>
     </div>
   );
 };

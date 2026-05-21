@@ -24,9 +24,8 @@ function Login({
     setLoading(true);
     setError("");
     try {
-      // OAuth2 yêu cầu application/x-www-form-urlencoded
       const formData = new URLSearchParams();
-      formData.append("username", email); // OAuth2 dùng field "username" cho cả email/username
+      formData.append("username", email);
       formData.append("password", password);
 
       const res = await fetch(authConfig.LOGIN_URL, {

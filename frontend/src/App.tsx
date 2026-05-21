@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 import {
   BrowserRouter,
   Routes,
@@ -15,13 +15,14 @@ import {
   Car,
   LogOut,
   Settings,
-  UserCircle,
   Sun,
   Moon,
   Home,
   BarChart3,
   Bot,
   ShieldCheck,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { clearAllChatData } from "@/utils/chatStorage";
 import LoginPage from "./pages/LoginPage";
@@ -68,238 +69,189 @@ function AppContent() {
     }
     return !!token;
   });
-  const [showUserDropdown, setShowUserDropdown] = useState(false);
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [collapsed, setCollapsed] = useState(false);
   const { theme, setTheme } = useTheme();
   const location = useLocation();
   const isLoginPage = location.pathname === "/login";
   const isChatPage = location.pathname === "/chat";
-  const hideDropdownTimeout = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
   const navigate = useNavigate();
 
   const handleLoginSuccess = () => setAuthed(true);
   const handleRegisterSuccess = () => setShowRegister(false);
   const handleLogout = () => {
-    // Clear authentication
     localStorage.removeItem("access_token");
-    // Clear chat data when user logs out
     clearAllChatData();
     setAuthed(false);
     setIsAdmin(false);
-    setShowUserDropdown(false);
     navigate("/login", { replace: true });
   };
 
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        dropdownRef.current &&
-        !dropdownRef.current.contains(event.target as Node)
-      ) {
-        setShowUserDropdown(false);
-      }
-    };
-    if (showUserDropdown) {
-      document.addEventListener("mousedown", handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [showUserDropdown]);
-
-  // Fetch current user to determine admin role
-  useEffect(() => {
     const fetchMe = async () => {
       try {
-        if (!authed) {
-          setIsAdmin(false);
-          return;
-        }
+        if (!authed) { setIsAdmin(false); return; }
         const token = localStorage.getItem("access_token");
-        if (!token) {
-          setIsAdmin(false);
-          return;
-        }
+        if (!token) { setIsAdmin(false); return; }
         const res = await fetch(`${authConfig.ME_URL}`, {
           headers: { Authorization: `Bearer ${token}` },
           credentials: "include",
         });
-        if (!res.ok) {
-          setIsAdmin(false);
-          return;
-        }
+        if (!res.ok) { setIsAdmin(false); return; }
         const data = await res.json();
         setIsAdmin(data?.role_id === 0);
-      } catch {
-        setIsAdmin(false);
-      }
+      } catch { setIsAdmin(false); }
     };
     fetchMe();
   }, [authed]);
 
-  return (
-    <div className={`app-shell ${isLoginPage ? "app-shell--login" : ""}`}>
-      <header className="app-header">
-        {!isLoginPage && (
-          <>
-            <a href="/home" className="app-brand" title="Trang chủ">
-              <span className="app-logo">
-                <Car className="h-6 w-6" />
-              </span>
-              <span className="app-brand-copy">
-                <strong>Smart Traffic System</strong>
-                <small>Realtime monitoring and analysis</small>
-              </span>
-            </a>
-
-            <nav className="app-nav" aria-label="Main navigation">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    className={({ isActive }) =>
-                      `app-nav-link ${isActive ? "app-nav-link--active" : ""}`
-                    }
-                  >
-                    <Icon className="h-4 w-4" />
-                    <span>{item.label}</span>
-                  </NavLink>
-                );
-              })}
-            </nav>
-          </>
-        )}
-
-        <div className={`app-actions ${isLoginPage ? 'ml-auto mr-4' : ''}`} ref={dropdownRef}>
-          {authed && !isLoginPage && (
-            <>
-              <button
-                className="app-account-trigger"
-                onClick={() => setShowUserDropdown((v) => !v)}
-                onMouseEnter={() => {
-                  if (hideDropdownTimeout.current)
-                    clearTimeout(hideDropdownTimeout.current);
-                  setShowUserDropdown(true);
-                }}
-                onMouseLeave={() => {
-                  hideDropdownTimeout.current = setTimeout(
-                    () => setShowUserDropdown(false),
-                    200,
-                  );
-                }}
-                type="button"
-              >
-                <UserCircle className="h-5 w-5" />
-                <span>Tài khoản</span>
-              </button>
-              <div
-                className={`app-account-dropdown ${showUserDropdown
-                    ? "opacity-100 scale-100 pointer-events-auto"
-                    : "opacity-0 scale-95 pointer-events-none"
-                  }`}
-                onMouseEnter={() => {
-                  if (hideDropdownTimeout.current)
-                    clearTimeout(hideDropdownTimeout.current);
-                  setShowUserDropdown(true);
-                }}
-                onMouseLeave={() => {
-                  hideDropdownTimeout.current = setTimeout(
-                    () => setShowUserDropdown(false),
-                    200,
-                  );
-                }}
-              >
-                {isAdmin && (
-                  <NavLink
-                    to="/admin/resources"
-                    className="app-account-item"
-                    onClick={() => setShowUserDropdown(false)}
-                  >
-                    <ShieldCheck className="h-4 w-4" />
-                    Trang Admin
-                  </NavLink>
-                )}
-                <NavLink
-                  to="/profile"
-                  className="app-account-item"
-                  onClick={() => setShowUserDropdown(false)}
-                >
-                  <Settings className="h-4 w-4" />
-                  Quản lý tài khoản
-                </NavLink>
-                <button
-                  className="app-account-item app-account-item--danger"
-                  onClick={() => {
-                    handleLogout();
-                    setShowUserDropdown(false);
-                  }}
-                  type="button"
-                >
-                  <LogOut className="h-4 w-4" /> Đăng xuất
-                </button>
-              </div>
-            </>
-          )}
-
+  if (isLoginPage) {
+    return (
+      <div className="app-shell--login">
+        <div className="login-theme-toggle">
           <Button
             variant="outline"
             size="icon"
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
             className="app-theme-toggle"
-            title={theme === "dark" ? "Chế độ sáng" : "Chế độ tối"}
           >
-            {theme === "dark" ? (
-              <Sun className="h-4 w-4" />
-            ) : (
-              <Moon className="h-4 w-4" />
-            )}
+            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
         </div>
-      </header>
+        <TrafficProvider>
+          <Routes>
+            <Route
+              path="/login"
+              element={
+                <LoginPage
+                  onLoginSuccess={handleLoginSuccess}
+                  onRegisterSuccess={handleRegisterSuccess}
+                  showRegister={showRegister}
+                  setShowRegister={setShowRegister}
+                />
+              }
+            />
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          </Routes>
+        </TrafficProvider>
+        <Toaster position="top-right" richColors />
+      </div>
+    );
+  }
 
-      <TrafficProvider>
-        <main className={`app-main ${isLoginPage ? "app-main--login" : ""} ${isChatPage ? "app-main--chat" : ""}`}>
-          <div className={isChatPage ? "h-full" : "app-page-shell"}>
-            <Routes>
-              <Route
-                path="/login"
-                element={
-                  <LoginPage
-                    onLoginSuccess={handleLoginSuccess}
-                    onRegisterSuccess={handleRegisterSuccess}
-                    showRegister={showRegister}
-                    setShowRegister={setShowRegister}
-                  />
-                }
-              />
-              <Route element={<ProtectedRoute />}>
-                <Route path="/home" element={<TrafficDashboard />} />
-                <Route path="/analys" element={<AnalyticsPage />} />
-                <Route path="/chat" element={<ChatPage />} />
-                <Route path="/profile" element={<ProfilePage />} />
-                <Route
-                  path="/admin"
-                  element={<Navigate to="/admin/resources" replace />}
-                />
-                <Route
-                  path="/admin/resources"
-                  element={<AdminResourcesPage />}
-                />
-                <Route path="/admin/roads" element={<AdminRoadsPage />} />
-              </Route>
-              <Route
-                path="*"
-                element={<Navigate to={authed ? "/home" : "/login"} replace />}
-              />
-            </Routes>
+  return (
+    <div className="sidebar-shell">
+      {/* ── Sidebar ── */}
+      <aside className={`sidebar ${collapsed ? "sidebar--collapsed" : ""}`}>
+        {/* Brand */}
+        <div className="sidebar-brand">
+          <div className="sidebar-logo">
+            <Car className="h-5 w-5" />
           </div>
-        </main>
-      </TrafficProvider>
+          {!collapsed && (
+            <div className="sidebar-brand-copy">
+              <strong>Smart Traffic</strong>
+              <small>Monitoring System</small>
+            </div>
+          )}
+        </div>
+
+        {/* Nav */}
+        <nav className="sidebar-nav">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                title={collapsed ? item.label : undefined}
+                className={({ isActive }) =>
+                  `sidebar-nav-link ${isActive ? "sidebar-nav-link--active" : ""}`
+                }
+              >
+                <Icon className="h-5 w-5 shrink-0" />
+                {!collapsed && <span>{item.label}</span>}
+              </NavLink>
+            );
+          })}
+
+          {isAdmin && (
+            <NavLink
+              to="/admin/resources"
+              title={collapsed ? "Trang Admin" : undefined}
+              className={({ isActive }) =>
+                `sidebar-nav-link sidebar-nav-link--admin ${isActive ? "sidebar-nav-link--active" : ""}`
+              }
+            >
+              <ShieldCheck className="h-5 w-5 shrink-0" />
+              {!collapsed && <span>Trang Admin</span>}
+            </NavLink>
+          )}
+        </nav>
+
+        {/* Bottom actions */}
+        <div className="sidebar-bottom">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            className="sidebar-icon-btn"
+            title={theme === "dark" ? "Chế độ sáng" : "Chế độ tối"}
+          >
+            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </Button>
+
+          <NavLink
+            to="/profile"
+            title={collapsed ? "Tài khoản" : undefined}
+            className={({ isActive }) =>
+              `sidebar-icon-btn ${isActive ? "sidebar-icon-btn--active" : ""}`
+            }
+          >
+            <Settings className="h-4 w-4" />
+            {!collapsed && <span className="text-sm font-medium">Tài khoản</span>}
+          </NavLink>
+
+          <button
+            className="sidebar-icon-btn sidebar-icon-btn--danger"
+            onClick={handleLogout}
+            title="Đăng xuất"
+            type="button"
+          >
+            <LogOut className="h-4 w-4" />
+            {!collapsed && <span className="text-sm font-medium">Đăng xuất</span>}
+          </button>
+
+          {/* Collapse toggle */}
+          <button
+            className="sidebar-collapse-btn"
+            onClick={() => setCollapsed((v) => !v)}
+            title={collapsed ? "Mở rộng" : "Thu gọn"}
+            type="button"
+          >
+            {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+          </button>
+        </div>
+      </aside>
+
+      {/* ── Main content ── */}
+      <div className={`sidebar-content ${isChatPage ? "sidebar-content--chat" : ""}`}>
+        <TrafficProvider>
+          <Routes>
+            <Route element={<ProtectedRoute />}>
+              <Route path="/home" element={<TrafficDashboard />} />
+              <Route path="/analys" element={<AnalyticsPage />} />
+              <Route path="/chat" element={<ChatPage />} />
+              <Route path="/profile" element={<ProfilePage />} />
+              <Route path="/admin" element={<Navigate to="/admin/resources" replace />} />
+              <Route path="/admin/resources" element={<AdminResourcesPage />} />
+              <Route path="/admin/roads" element={<AdminRoadsPage />} />
+            </Route>
+            <Route path="*" element={<Navigate to={authed ? "/home" : "/login"} replace />} />
+          </Routes>
+        </TrafficProvider>
+      </div>
+
       <Toaster position="top-right" richColors />
     </div>
   );
