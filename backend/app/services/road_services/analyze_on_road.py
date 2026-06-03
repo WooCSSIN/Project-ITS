@@ -49,6 +49,7 @@ class AnalyzeOnRoad(AnalyzeOnRoadBase):
         self.info_key = f"traffic:road:{self.name}:info"
         self.frame_key = f"traffic:road:{self.name}:frame"
         self.history_queue_key = "traffic:history:queue"
+        self.violation_queue_key = "violations:queue"
         self.frame_ttl_seconds = 10
         self.info_ttl_seconds = 120
 
@@ -84,6 +85,22 @@ class AnalyzeOnRoad(AnalyzeOnRoadBase):
             self.redis.lpush(self.history_queue_key, json.dumps({"road_name": self.name, **payload}, ensure_ascii=False))
         except Exception:
             logger.exception("Loi khi update thong tin phuong tien cua %s", self.name)
+
+    def _push_violations_to_queue(self, new_violations: list):
+        """Đẩy các vi phạm mới phát hiện vào Redis queue để ViolationWorker ghi vào DB."""
+        for v in new_violations:
+            payload = {
+                "camera_id": v.get("camera_id"),
+                "violation_type": v.get("violation_type"),
+                "vehicle_track_id": v.get("vehicle_track_id"),
+                "license_plate": v.get("license_plate"),
+                "confidence": v.get("confidence"),
+                "timestamp": v.get("timestamp"),
+            }
+            try:
+                self.redis.lpush(self.violation_queue_key, json.dumps(payload))
+            except Exception:
+                logger.exception("Lỗi khi đẩy vi phạm vào Redis queue")
 
 #************************************************************************ Script for testing *******************************************************
 if __name__ == "__main__":

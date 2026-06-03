@@ -166,4 +166,14 @@ export const endpoints = {
     `${apiConfig.API_HTTP_BASE}/admin/traffic/roads/${encodeURIComponent(roadName)}/stop`,
   adminStartRoadProcess: (roadName: string) =>
     `${apiConfig.API_HTTP_BASE}/admin/traffic/roads/${encodeURIComponent(roadName)}/start`,
+
+  // Violations (Xử phạt nguội)
+  violations: `${apiConfig.API_HTTP_BASE}/violations`,
+  violation: (id: number | string) => `${apiConfig.API_HTTP_BASE}/violations/${id}`,
+  violationExportPdf: (id: number | string) => `${apiConfig.API_HTTP_BASE}/violations/${id}/export-pdf`,
+
+  // Zone Configuration (Cấu hình vùng cảnh báo)
+  zones: `${apiConfig.API_HTTP_BASE}/zones`,
+  zonesForCamera: (cameraId: number) => `${apiConfig.API_HTTP_BASE}/zones?camera_id=${cameraId}`,
+  deleteZone: (id: number) => `${apiConfig.API_HTTP_BASE}/zones/${id}`,
 };

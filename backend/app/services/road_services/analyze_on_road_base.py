@@ -8,6 +8,8 @@ from datetime import datetime
 from ultralytics import solutions
 from utils.transport_utils import avg_none_zero_batch
 from core.config import settings_metric_transport
+from core.violation_engine import ViolationEngine
+from core.anpr import ANPREngine
 logger = logging.getLogger(__name__)
 
 class AnalyzeOnRoadBase:
@@ -110,12 +112,32 @@ class AnalyzeOnRoadBase:
         self.boxes = None
         self.classes = None
         self.ids_old = set()
+
+        # Khởi tạo Violation Engine & ANPR
+        # (Tạm dùng hash name làm camera_id)
+        cam_id = abs(hash(self.name)) % (10 ** 4)
+        self.violation_engine = ViolationEngine(camera_id=cam_id)
+        
+        # Test mock zone: Giả lập một zone cấm vượt đèn đỏ nhỏ nằm trong region
+        # Trong thực tế, cái này nên được cấu hình từ API
+        bx, by, bw, bh = self.region_bbox
+        mock_red_light_zone = [(bx, by + bh//2), (bx + bw, by + bh//2), (bx + bw, by + bh), (bx, by + bh)]
+        self.violation_engine.set_zone("red_light", mock_red_light_zone)
+        # Giả lập đèn đang đỏ để test
+        self.violation_engine.set_red_light_status(True)
+
+        self.anpr_engine = ANPREngine(use_gpu=False)
+
     @abstractmethod
     def update_for_frame(self):
         pass
 
     @abstractmethod
     def update_for_vehicle(self):
+        pass
+
+    def _push_violations_to_queue(self, new_violations: list):
+        """No-op mặc định. Được override bởi AnalyzeOnRoad (có Redis) để đẩy vi phạm vào queue."""
         pass
 
     def update_data(self):
@@ -173,10 +195,32 @@ class AnalyzeOnRoadBase:
             self.speed_tool.process(self.frame_predict.copy())
 
             self.post_processing()
-
+            
+            # --- TÍCH HỢP VIOLATION & ANPR ---
+            if self.ids is not None and len(self.ids) > 0:
+                new_violations = self.violation_engine.process_frame_tracking(
+                    frame=self.frame_output,
+                    track_ids=self.ids,
+                    boxes=self.boxes,
+                    classes=self.classes,
+                    speeds=self.speeds
+                )
+                for v in new_violations:
+                    plate = self.anpr_engine.read_license_plate(self.frame_output, v["box"])
+                    v["license_plate"] = plate
+                    logger.warning(
+                        "🚨 PHÁT HIỆN VI PHẠM: %s - Biển số: %s - Camera: %s",
+                        v['violation_type'], plate, self.name
+                    )
+                # Gọi hàm push vào Redis queue (override bởi AnalyzeOnRoad con)
+                self._push_violations_to_queue(new_violations)
+            
             # Vẽ đè lên hình các thông tin
             if self.is_draw:
                 self.draw_info_to_frame_output()
+                # Vẽ thêm các zone vi phạm (nếu có) để test
+                self.frame_output = self.violation_engine.draw_zones(self.frame_output)
+                
             # p = Thread(target= lambda : self.post_processing())
             # p.start()
 
