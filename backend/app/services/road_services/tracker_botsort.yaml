@@ -1,0 +1,21 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+
+# BoT-SORT tracker — sử dụng khi CÓ GPU
+# BoT-SORT bổ sung appearance features (Re-ID) so với ByteTrack,
+# giảm ID-switch ~30-50% nhưng nặng hơn ~20-30% CPU.
+# Docs: https://docs.ultralytics.com/modes/track/
+
+tracker_type: botsort        # (str) Tracker backend: botsort|bytetrack
+track_high_thresh: 0.35      # (float) Detection confidence threshold cho track chính
+track_low_thresh: 0.1        # (float) Ngưỡng thấp để recover xe bị che khuất
+new_track_thresh: 0.4        # (float) Cao hơn ByteTrack: BoT-SORT có ReID nên ít cần tạo track mới
+track_buffer: 45             # (int) ~1.5s ở 30fps — buffer giữ track khi bị mất tạm
+match_thresh: 0.8            # (float) IoU threshold cho association
+fuse_score: True             # (bool) Kết hợp detection score + IoU
+
+# BoT-SORT specific parameters
+gmc_method: sparseOptFlow    # (str) Global Motion Compensation: sparseOptFlow|orb|ecc|none
+                             # sparseOptFlow tốt nhất cho camera cố định
+proximity_thresh: 0.5        # (float) Spatial proximity threshold cho ReID matching
+appearance_thresh: 0.25      # (float) Appearance similarity threshold (thấp = strict matching)
+with_reid: False             # (bool) Tạm tắt ReID để tránh lỗi cfg.model trong bản Ultralytics hiện tại

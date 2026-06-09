@@ -1,12 +1,12 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
-# ByteTrack tracker defaults for mode="track"
+# ByteTrack tracker — tuned for dense Vietnamese traffic (motorbikes + cars at intersections)
 # Docs: https://docs.ultralytics.com/modes/track/
 
-tracker_type: bytetrack # (str) Tracker backend: botsort|bytetrack; choose bytetrack for the classic baseline
-track_high_thresh: 0.25 # (float) First-stage match threshold; raise for cleaner tracks, lower to keep more
-track_low_thresh: 0.1 # (float) Second-stage threshold for low-score matches; balances recovery vs drift
-new_track_thresh: 0.25 # (float) Start a new track if no match ≥ this; higher reduces false tracks
-track_buffer: 90 # (int) Frames to keep lost tracks alive; higher handles occlusion, increases ID switches risk
-match_thresh: 0.8 # (float) Association similarity threshold (IoU/cost); tune with detector quality
-fuse_score: True # (bool) Fuse detection score with motion/IoU for matching; stabilizes weak detections
+tracker_type: bytetrack # (str) Tracker backend: botsort|bytetrack
+track_high_thresh: 0.35 # (float) Tăng từ 0.25 → 0.35: bớt false-positive tracks ở giao lộ đông
+track_low_thresh: 0.1  # (float) Giữ nguyên: vẫn recover được xe bị che khuất tạm thời
+new_track_thresh: 0.35 # (float) Tăng từ 0.25 → 0.35: giảm ghost tracks khi xe ra vào khung hình
+track_buffer: 45       # (int) Giảm từ 90 → 45: ~1.5s ở 30fps, đủ handle occlusion, ít ID-switch hơn
+match_thresh: 0.85     # (float) Tăng từ 0.8 → 0.85: cẩn thận hơn khi associate, giảm nhầm ID
+fuse_score: True       # (bool) Giữ nguyên: kết hợp detection score + IoU cho kết quả ổn định hơn

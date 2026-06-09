@@ -13,9 +13,15 @@ class ViolationEngine:
     - red_light: Vượt đèn đỏ
     - wrong_lane: Đi sai làn
     - no_parking: Dừng đỗ sai quy định
+    - speeding: Vượt quá tốc độ cho phép
     """
     
-    def __init__(self, camera_id: int):
+    def __init__(self, camera_id: int, speed_limit_kmh: float = 0.0):
+        """
+        Args:
+            camera_id (int): ID của camera.
+            speed_limit_kmh (float): Ngưỡng tốc độ tối đa (km/h). 0 = tắt kiểm tra tốc độ.
+        """
         self.camera_id = camera_id
         
         # Cấu hình các vùng vi phạm (Polygon) cho camera này
@@ -23,12 +29,22 @@ class ViolationEngine:
         self.zones = {
             "red_light": None,  # np.array of polygon points
             "wrong_lane": None,
-            "no_parking": None
+            "no_parking": None,
         }
         
         # Trạng thái hiện tại của đèn tín hiệu (True = Đỏ, False = Xanh/Vàng)
         self.is_red_light_on = False
         
+        # Ngưỡng tốc độ vi phạm (km/h). Mặc định 0 = tắt.
+        # Đặt qua set_speed_limit() hoặc khi khởi tạo.
+        self.speed_limit_kmh = speed_limit_kmh
+
+        # Buffer để tích lũy tốc độ trước khi xác nhận vi phạm tốc độ
+        # Tránh false positive khi speed smoother chưa ổn định
+        # dict: track_id -> list[float] (last N speed readings)
+        self._speed_history: Dict[int, List[float]] = {}
+        self._speed_history_len: int = 5  # Cần liên tục N lần đo vượt ngưỡng
+
         # Tracking lịch sử để xử lý lỗi dừng đỗ quá thời gian (no_parking)
         # dict: track_id -> {"start_time": float, "last_pos": (cx, cy)}
         self.stopped_vehicles = {}
@@ -48,6 +64,11 @@ class ViolationEngine:
         """Cập nhật trạng thái đèn đỏ"""
         self.is_red_light_on = status
 
+    def set_speed_limit(self, speed_limit_kmh: float):
+        """Cập nhật ngưỡng tốc độ tối đa cho camera này."""
+        self.speed_limit_kmh = max(0.0, speed_limit_kmh)
+        logger.info("Camera %s: speed limit set to %.1f km/h", self.camera_id, self.speed_limit_kmh)
+
     def check_point_in_zone(self, pt: Tuple[int, int], zone_name: str) -> bool:
         """Kiểm tra xem toạ độ pt có nằm trong zone không"""
         zone_polygon = self.zones.get(zone_name)
@@ -55,6 +76,37 @@ class ViolationEngine:
             return False
         # pointPolygonTest trả về >= 0 nếu điểm nằm trong hoặc trên cạnh polygon
         return cv2.pointPolygonTest(zone_polygon, pt, False) >= 0
+
+    def _check_speeding(self, track_id: int, speed: float) -> bool:
+        """Xác nhận vi phạm tốc độ chỉ khi xe liên tục vượt ngưỡng N lần đo liên tiếp.
+
+        Tránh false positive từ noise của SpeedEstimator trong 1-2 frame đầu.
+
+        Args:
+            track_id: ID theo dõi của xe.
+            speed: Tốc độ hiện tại (km/h, đã qua EMA smoother).
+
+        Returns:
+            True nếu xác nhận vi phạm tốc độ.
+        """
+        if self.speed_limit_kmh <= 0:
+            return False
+
+        # Tốc độ tối thiểu để tính vào buffer (loại xe đứng yên / mới xuất hiện)
+        if speed < 3.0:
+            self._speed_history.pop(track_id, None)
+            return False
+
+        hist = self._speed_history.setdefault(track_id, [])
+        hist.append(speed)
+
+        # Chỉ giữ N readings gần nhất
+        if len(hist) > self._speed_history_len:
+            hist.pop(0)
+
+        # Xác nhận vi phạm khi TẤT CẢ N readings đều vượt ngưỡng (20% buffer)
+        threshold = self.speed_limit_kmh * 1.2
+        return len(hist) >= self._speed_history_len and all(s > threshold for s in hist)
 
     def process_frame_tracking(
         self, 
@@ -83,7 +135,7 @@ class ViolationEngine:
         cy = ((y1 + y2) // 2).astype(np.int32)
 
         for i, track_id in enumerate(track_ids):
-            # Nếu xe đã vi phạm rồi thì bỏ qua
+            # Nếu xe đã vi phạm rồi thì bỏ qua (trừ speeding — có thể vi phạm nhiều lần)
             if track_id in self.recorded_violations:
                 continue
 
@@ -101,7 +153,7 @@ class ViolationEngine:
 
             # 2. Phát hiện đi sai làn (Wrong lane)
             elif self.check_point_in_zone(pt, "wrong_lane"):
-                # Tùy logic: Ví dụ làn chỉ dành cho oto(class_id=0), nếu xe máy(class_id=1) đi vào là vi phạm
+                # Làn chỉ dành cho oto (class_id=0), xe máy (class_id=1) đi vào là vi phạm
                 if class_id == 1: 
                     violation_type = "wrong_lane"
 
@@ -124,19 +176,28 @@ class ViolationEngine:
                 if track_id in self.stopped_vehicles:
                     del self.stopped_vehicles[track_id]
 
+            # 4. Phát hiện vượt tốc độ (Speeding) — kiểm tra độc lập với zone
+            # Không dùng recorded_violations cho speeding để có thể ghi nhận lại nếu cần
+            if violation_type is None and self._check_speeding(track_id, speed):
+                violation_type = "speeding"
+
             # Ghi nhận vi phạm
             if violation_type:
                 new_violations.append({
                     "camera_id": self.camera_id,
                     "violation_type": violation_type,
                     "vehicle_track_id": int(track_id),
-                    "confidence": 0.95, # Có thể lấy từ model object detection
-                    # Ảnh bằng chứng sẽ được cắt từ frame gốc (crop bounding box + margin)
+                    "speed_kmh": round(speed, 1),
+                    "speed_limit_kmh": self.speed_limit_kmh if violation_type == "speeding" else None,
+                    "confidence": 0.95,
                     "box": (int(x1[i]), int(y1[i]), int(x2[i]), int(y2[i])),
                     "timestamp": current_time
                 })
                 self.recorded_violations.add(track_id)
-                logger.info(f"Phát hiện vi phạm: {violation_type} (Track ID: {track_id})")
+                logger.info(
+                    "Phát hiện vi phạm: %s (Track ID: %d, Speed: %.1f km/h)",
+                    violation_type, track_id, speed
+                )
 
         return new_violations
 
@@ -146,7 +207,7 @@ class ViolationEngine:
         colors = {
             "red_light": (0, 0, 255),    # Đỏ
             "wrong_lane": (0, 255, 255), # Vàng
-            "no_parking": (255, 0, 0)    # Xanh biển
+            "no_parking": (255, 0, 0),   # Xanh biển
         }
         
         for zone_name, polygon in self.zones.items():

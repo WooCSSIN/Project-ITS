@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, MouseEvent } from "react";
-import { Save, RefreshCcw, Navigation, Trash2, CheckCircle } from "lucide-react";
+import { useState, useEffect, useRef, type MouseEvent } from "react";
+import { Save, RefreshCcw, Navigation, Trash2, CheckCircle, WifiOff, Wifi } from "lucide-react";
 import { Button } from "@/ui/button";
 import { toast } from "sonner";
 import { endpoints } from "@/config";
@@ -26,43 +26,127 @@ const ZONE_STROKE: Record<string, string> = {
   no_parking: "#3b82f6",
 };
 
+const ZONE_LABEL: Record<string, string> = {
+  red_light: "Vượt Đèn Đỏ",
+  wrong_lane: "Đi Sai Làn",
+  no_parking: "Dừng Đỗ Sai",
+};
+
 const getAuthHeaders = (): Record<string, string> => {
   const token = localStorage.getItem("access_token");
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
-
-const CAMERA_ID = 1; // Mặc định camera đầu tiên
 
 export default function ZoneConfig() {
   const [points, setPoints] = useState<Point[]>([]);
   const [zoneType, setZoneType] = useState("red_light");
   const [savedZones, setSavedZones] = useState<SavedZone[]>([]);
   const [saving, setSaving] = useState(false);
+
+  // Road / camera selection
+  const [roadNames, setRoadNames] = useState<string[]>([]);
+  const [selectedRoad, setSelectedRoad] = useState<string>("");
+  const [cameraId, setCameraId] = useState<number>(1);
+
+  // Live frame via WebSocket
+  const [frameUrl, setFrameUrl] = useState<string | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const blobUrlRef = useRef<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const snapshotUrl = "https://images.unsplash.com/photo-1449824913935-59a10b8d2000?q=80&w=1200&auto=format&fit=crop";
+  // ── Fetch danh sách đường ─────────────────────────────────────────
+  useEffect(() => {
+    fetch(endpoints.roadNames, { headers: getAuthHeaders() })
+      .then(r => r.json())
+      .then((data: string[] | { road_names: string[] }) => {
+        // API trả về { road_names: [...] } hoặc array trực tiếp
+        const names = Array.isArray(data) ? data : (data as { road_names: string[] }).road_names ?? [];
+        setRoadNames(names);
+        if (names.length > 0) setSelectedRoad(names[0]);
+      })
+      .catch(() => console.error("Không tải được danh sách đường."));
+  }, []);
 
-  // Load zones đã lưu từ backend
+  // Gán cameraId theo index của đường (tạm thời 1-based, đủ để phân biệt zone)
+  useEffect(() => {
+    const idx = roadNames.indexOf(selectedRoad);
+    setCameraId(idx >= 0 ? idx + 1 : 1);
+  }, [selectedRoad, roadNames]);
+
+  // ── WebSocket lấy frame camera ────────────────────────────────────
+  useEffect(() => {
+    if (!selectedRoad) return;
+
+    // Đóng socket cũ
+    if (wsRef.current) {
+      wsRef.current.onopen = null;
+      wsRef.current.onmessage = null;
+      wsRef.current.onclose = null;
+      wsRef.current.onerror = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    setWsConnected(false);
+
+    const token = localStorage.getItem("access_token");
+    const wsUrl = endpoints.framesWs(selectedRoad);
+    const fullUrl = token ? `${wsUrl}?token=${encodeURIComponent(token)}` : wsUrl;
+
+    const ws = new WebSocket(fullUrl);
+    ws.binaryType = "arraybuffer";
+    wsRef.current = ws;
+
+    ws.onopen = () => setWsConnected(true);
+
+    ws.onmessage = (event) => {
+      // Giải phóng blob URL cũ
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+      const blob = new Blob([event.data as ArrayBuffer], { type: "image/jpeg" });
+      const url = URL.createObjectURL(blob);
+      blobUrlRef.current = url;
+      setFrameUrl(url);
+    };
+
+    ws.onclose = () => setWsConnected(false);
+    ws.onerror = () => setWsConnected(false);
+
+    return () => {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.close();
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
+    };
+  }, [selectedRoad]);
+
+  // ── Load zone đã lưu ─────────────────────────────────────────────
   const fetchZones = async () => {
+    if (!cameraId) return;
     try {
-      const res = await fetch(endpoints.zonesForCamera(CAMERA_ID), { headers: getAuthHeaders() });
+      const res = await fetch(endpoints.zonesForCamera(cameraId), { headers: getAuthHeaders() });
       if (res.ok) setSavedZones(await res.json());
     } catch {
       console.error("Không thể tải zone configs.");
     }
   };
 
-  useEffect(() => { fetchZones(); }, []);
+  useEffect(() => { fetchZones(); }, [cameraId]);
 
+  // ── Click vẽ điểm ────────────────────────────────────────────────
   const handleImageClick = (e: MouseEvent<HTMLDivElement>) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    // Map về toạ độ tỷ lệ (0-1) thay vì pixel tuyệt đối để tránh lệch khi resize
     const xRatio = (e.clientX - rect.left) / rect.width;
     const yRatio = (e.clientY - rect.top) / rect.height;
     setPoints(prev => [...prev, { x: xRatio, y: yRatio }]);
   };
 
+  // ── Lưu zone ─────────────────────────────────────────────────────
   const handleSave = async () => {
     if (points.length < 3) {
       toast.error("Vui lòng vẽ ít nhất 3 điểm để tạo vùng khép kín!");
@@ -74,10 +158,10 @@ export default function ZoneConfig() {
         method: "POST",
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({
-          camera_id: CAMERA_ID,
+          camera_id: cameraId,
           zone_type: zoneType,
           points: points.map(p => [p.x, p.y]),
-          zone_name: `${zoneType}_cam${CAMERA_ID}`,
+          zone_name: `${zoneType}_cam${cameraId}`,
         }),
       });
       if (res.ok) {
@@ -94,6 +178,7 @@ export default function ZoneConfig() {
     }
   };
 
+  // ── Xoá zone ─────────────────────────────────────────────────────
   const handleDeleteZone = async (id: number) => {
     try {
       const res = await fetch(endpoints.deleteZone(id), {
@@ -109,23 +194,38 @@ export default function ZoneConfig() {
     }
   };
 
-  // Render polygon trên SVG từ toạ độ tỷ lệ
-  const toPixels = (ratioPoints: number[][], width: number, height: number) =>
-    ratioPoints.map(([rx, ry]) => `${rx * width},${ry * height}`).join(" ");
-
   return (
     <div className="p-6 flex flex-col gap-6 animate-in fade-in duration-300 max-w-6xl mx-auto w-full">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Cấu hình Vùng Cảnh Báo</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Click lên hình camera để vẽ vùng phát hiện vi phạm. Toạ độ sẽ được lưu vào hệ thống.
+          Chọn camera, click lên hình để vẽ vùng phát hiện vi phạm. Toạ độ sẽ được lưu vào hệ thống.
         </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        {/* Thanh công cụ */}
+        {/* ── Thanh công cụ ── */}
         <div className="md:col-span-1 flex flex-col gap-4">
           <div className="border rounded-xl bg-card p-5 shadow-sm space-y-4">
+
+            {/* Chọn camera */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Chọn Camera</label>
+              <select
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                value={selectedRoad}
+                onChange={(e) => { setSelectedRoad(e.target.value); setPoints([]); }}
+              >
+                {roadNames.length === 0 && (
+                  <option value="">Đang tải...</option>
+                )}
+                {roadNames.map(name => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Loại vi phạm */}
             <div className="space-y-2">
               <label className="text-sm font-medium">Loại Vi Phạm</label>
               <select
@@ -154,13 +254,18 @@ export default function ZoneConfig() {
               <Button variant="outline" size="sm" className="gap-2" onClick={() => setPoints([])}>
                 <RefreshCcw size={14} /> Xoá điểm
               </Button>
-              <Button size="sm" className="gap-2" onClick={handleSave} disabled={saving || points.length < 3}>
+              <Button
+                size="sm"
+                className="gap-2"
+                onClick={handleSave}
+                disabled={saving || points.length < 3}
+              >
                 <Save size={14} /> {saving ? "Đang lưu..." : "Lưu cấu hình"}
               </Button>
             </div>
           </div>
 
-          {/* Danh sách zones đã lưu */}
+          {/* Zones đã lưu */}
           {savedZones.length > 0 && (
             <div className="border rounded-xl bg-card p-4 shadow-sm space-y-2">
               <h3 className="text-sm font-semibold flex items-center gap-2">
@@ -170,10 +275,16 @@ export default function ZoneConfig() {
               {savedZones.map(z => (
                 <div key={z.id} className="flex items-center justify-between text-xs py-1.5 border-b last:border-0">
                   <span className="flex items-center gap-1.5">
-                    <span style={{ backgroundColor: ZONE_STROKE[z.zone_type] }} className="w-2.5 h-2.5 rounded-full inline-block" />
-                    {z.zone_type === "red_light" ? "Đèn đỏ" : z.zone_type === "wrong_lane" ? "Sai làn" : "Cấm đỗ"}
+                    <span
+                      style={{ backgroundColor: ZONE_STROKE[z.zone_type] }}
+                      className="w-2.5 h-2.5 rounded-full inline-block"
+                    />
+                    {ZONE_LABEL[z.zone_type] ?? z.zone_type}
                   </span>
-                  <button onClick={() => handleDeleteZone(z.id)} className="text-muted-foreground hover:text-destructive transition-colors">
+                  <button
+                    onClick={() => handleDeleteZone(z.id)}
+                    className="text-muted-foreground hover:text-destructive transition-colors"
+                  >
                     <Trash2 size={13} />
                   </button>
                 </div>
@@ -182,11 +293,34 @@ export default function ZoneConfig() {
           )}
         </div>
 
-        {/* Canvas vẽ */}
-        <div className="md:col-span-3 border rounded-xl overflow-hidden shadow-sm bg-black aspect-video relative cursor-crosshair" ref={containerRef} onClick={handleImageClick}>
-          <img src={snapshotUrl} alt="Camera Feed" className="w-full h-full object-cover select-none pointer-events-none" />
+        {/* ── Canvas vẽ zone ── */}
+        <div
+          className="md:col-span-3 border rounded-xl overflow-hidden shadow-sm bg-black aspect-video relative cursor-crosshair"
+          ref={containerRef}
+          onClick={handleImageClick}
+        >
+          {/* Frame camera live */}
+          {frameUrl ? (
+            <img
+              src={frameUrl}
+              alt="Camera Feed"
+              className="w-full h-full object-cover select-none pointer-events-none"
+            />
+          ) : (
+            <div className="w-full h-full flex flex-col items-center justify-center text-white/50 gap-2 select-none">
+              <WifiOff size={32} />
+              <span className="text-sm">
+                {selectedRoad ? `Đang kết nối tới ${selectedRoad}...` : "Chưa chọn camera"}
+              </span>
+            </div>
+          )}
 
-          <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1 1" preserveAspectRatio="none">
+          {/* SVG overlay vẽ zone */}
+          <svg
+            className="absolute inset-0 w-full h-full pointer-events-none"
+            viewBox="0 0 1 1"
+            preserveAspectRatio="none"
+          >
             {/* Zones đã lưu */}
             {savedZones.map(z => {
               const pts = z.points.map(([rx, ry]) => `${rx},${ry}`).join(" ");
@@ -200,6 +334,7 @@ export default function ZoneConfig() {
                 />
               );
             })}
+
             {/* Zone đang vẽ */}
             {points.length >= 3 && (
               <polygon
@@ -218,16 +353,28 @@ export default function ZoneConfig() {
                 strokeWidth="0.003"
               />
             )}
+
+            {/* Các điểm đã chấm */}
             {points.map((p, i) => (
               <g key={i}>
-                <circle cx={p.x} cy={p.y} r="0.008" fill="white" stroke={ZONE_STROKE[zoneType]} strokeWidth="0.003" />
+                <circle
+                  cx={p.x} cy={p.y} r="0.008"
+                  fill="white"
+                  stroke={ZONE_STROKE[zoneType]}
+                  strokeWidth="0.003"
+                />
               </g>
             ))}
           </svg>
 
+          {/* Badge camera + trạng thái kết nối */}
           <div className="absolute top-3 right-3 bg-black/60 text-white text-xs px-3 py-1.5 rounded-full flex items-center gap-1.5 backdrop-blur-sm">
+            {wsConnected
+              ? <Wifi size={12} className="text-green-400" />
+              : <WifiOff size={12} className="text-red-400" />
+            }
             <Navigation size={12} />
-            Camera {CAMERA_ID}: Ngã 4 Tôn Đức Thắng
+            {selectedRoad || "Chưa chọn camera"}
           </div>
         </div>
       </div>

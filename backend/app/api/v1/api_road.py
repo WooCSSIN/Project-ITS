@@ -260,6 +260,56 @@ async def websocket_chart(websocket: WebSocket, road_name: str):
         await websocket.close()
 
 
+@router.websocket("/ws/violations")
+async def websocket_violations(
+    websocket: WebSocket,
+    current_user=Depends(get_current_user_ws),
+):
+    """WebSocket endpoint push realtime violations từ Redis pubsub."""
+    analyzer = v1.state.analyzer
+    if analyzer is None:
+        await websocket.accept()
+        await websocket.send_json({"detail": "Traffic service unavailable."})
+        await websocket.close(code=1013)
+        return
+
+    await websocket.accept()
+    logger.info("Violations websocket connected (user_id=%s)", "TEST")
+
+    import json
+    import redis.asyncio as aioredis
+    from core.config import settings_server
+
+    redis_client = aioredis.from_url(settings_server.REDIS_URL, decode_responses=True)
+    pubsub = redis_client.pubsub()
+    await pubsub.subscribe("violations:alerts")
+
+    try:
+        while True:
+            # Kiểm tra trạng thái client
+            if websocket.client_state.name != "CONNECTED":
+                break
+
+            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            if message:
+                try:
+                    payload = json.loads(message["data"])
+                    await websocket.send_json(payload)
+                except Exception as e:
+                    logger.warning("Error parsing violation alert: %s", e)
+    except WebSocketDisconnect:
+        logger.info("Violations websocket disconnected")
+    except Exception as exc:
+        logger.exception("Violations websocket error: %s", exc)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+    finally:
+        await pubsub.unsubscribe("violations:alerts")
+        await redis_client.aclose()
+
+
 @router.get("/info/{road_name}", response_model=TrafficInfoResponse)
 async def get_info_road(road_name: str, analyzer=Depends(get_traffic_runtime)):
     data = await run_in_threadpool(analyzer.get_info_road, road_name)

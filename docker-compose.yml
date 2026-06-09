@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
       POSTGRES_DB: ${DATABASE_NAME}
     ports:
-      - "${DATABASE_PORT:-5432}:5432"
+      - "${DATABASE_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -84,6 +84,8 @@ services:
       MINIO_PUBLIC_SCHEME: http
       CHAT_MEMORY_DB_URI: "postgresql://postgres:Traffic@123@database:5432/transportation_system"
       API_BASE_URL: "http://localhost:8000"
+      BATCH_INFERENCE_ENABLED: "true"
+      GPU_ENABLED: "${GPU_ENABLED:-true}"
     ports:
       - "8000:8000"
     volumes:
@@ -93,6 +95,8 @@ services:
       - ./backend/app/services/chat_services/chat_bot_agent.py:/backend/app/services/chat_services/chat_bot_agent.py
       - ./backend/app/core/config.py:/backend/app/core/config.py
       - ./backend/app/services/road_services/analyze_on_road_base.py:/backend/app/services/road_services/analyze_on_road_base.py
+      # Xuất logs từ backend ra ngoài host
+      - ./logs/backend:/backend/app/logs
     depends_on:
       database:
         condition: service_healthy
@@ -120,6 +124,40 @@ services:
               count: all
               capabilities: [gpu]
 
+  inference-server:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        DEVICE: ${DEVICE:-cpu}
+    container_name: sts-inference
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_HOST: database
+      DATABASE_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      GPU_ENABLED: "true"
+    command: >
+      bash -c "PYTHONPATH=/backend/app python /backend/app/services/road_services/batch_inference_server.py"
+    volumes:
+      - ./backend/app/services/road_services/batch_inference_server.py:/backend/app/services/road_services/batch_inference_server.py
+      - ./backend/app/services/road_services/tracker_botsort.yaml:/backend/app/services/road_services/tracker_botsort.yaml
+      - ./backend/app/core/config.py:/backend/app/core/config.py
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - sts-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   frontend:
     build:
       context: ./frontend
@@ -131,6 +169,22 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    networks:
+      - sts-net
+
+  nginx:
+    image: nginx:alpine
+    container_name: sts-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"  # Cổng chính để truy cập toàn bộ hệ thống
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Xuất logs NGINX ra ngoài host
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      - backend
+      - frontend
     networks:
       - sts-net
 

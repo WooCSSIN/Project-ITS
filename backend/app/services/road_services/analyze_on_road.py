@@ -48,27 +48,58 @@ class AnalyzeOnRoad(AnalyzeOnRoadBase):
         self.redis = redis.Redis.from_url(redis_url)
         self.info_key = f"traffic:road:{self.name}:info"
         self.frame_key = f"traffic:road:{self.name}:frame"
-        self.history_queue_key = "traffic:history:queue"
         self.violation_queue_key = "violations:queue"
         self.frame_ttl_seconds = 10
         self.info_ttl_seconds = 120
+        self._load_zones_from_db()
+
+    def _load_zones_from_db(self):
+        """Tải cấu hình zone thực tế từ DB khi process khởi động."""
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from models.zone_config import ZoneConfig
+            from core.config import settings_server
+
+            sync_url = settings_server.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+            engine = create_engine(sync_url)
+            SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+            with SessionLocal() as db:
+                db_zones = db.query(ZoneConfig).filter(
+                    ZoneConfig.camera_id == self.violation_engine.camera_id,
+                    ZoneConfig.is_active == True
+                ).all()
+
+                for z in db_zones:
+                    self.violation_engine.set_zone(z.zone_type, z.points)
+                    logger.info("Camera %s (ID: %s): Loaded zone %s", self.name, self.violation_engine.camera_id, z.zone_type)
+        except Exception as e:
+            logger.warning("Camera %s: Không thể load zone từ DB (%s). Dùng mock zone.", self.name, str(e))
+
+    # JPEG quality cho WebSocket stream (75 = balance giữa quality và Redis I/O)
+    # WebRTC sử dụng quality riêng khi encode lại, nên 85 là đủ cho intermediate storage.
+    _FRAME_JPEG_QUALITY: int = 85
 
     @override
     def update_for_frame(self):
-        """Cập nhật frame đang xử lý hiện tại gán vào Manage.dict() để chia sẽ dữ liệu các process với nhau dễ dàng. 
+        """Cập nhật frame đang xử lý hiện tại vào Redis để chia sẻ dữ liệu giữa các process.
+
+        Quality 85 thay vì 98: tiết kiệm ~40% Redis I/O, WebRTC sẽ tự re-encode
+        nên chất lượng cuối không bị ảnh hưởng đáng kể.
         """
-        try: 
+        try:
             if self.frame_output is None:
                 return
-            # Prefer high JPEG quality because this frame is re-encoded again by WebRTC.
             _, jpeg = cv2.imencode(
                 '.jpg',
                 self.frame_output,
-                [cv2.IMWRITE_JPEG_QUALITY, 98],
+                [cv2.IMWRITE_JPEG_QUALITY, self._FRAME_JPEG_QUALITY],
             )
             self.redis.setex(self.frame_key, self.frame_ttl_seconds, jpeg.tobytes())
         except Exception:
             logger.exception("Loi khi cap nhat frame moi nhat cua %s", self.name)
+    
 
     @override
     def update_for_vehicle(self):
@@ -96,11 +127,15 @@ class AnalyzeOnRoad(AnalyzeOnRoadBase):
                 "license_plate": v.get("license_plate"),
                 "confidence": v.get("confidence"),
                 "timestamp": v.get("timestamp"),
+                "evidence_image_url": v.get("evidence_image_url"),  # URL MinIO hoặc None nếu upload thất bại
             }
             try:
-                self.redis.lpush(self.violation_queue_key, json.dumps(payload))
+                payload_str = json.dumps(payload)
+                self.redis.lpush(self.violation_queue_key, payload_str)
+                # Publish to pub/sub for realtime websocket alerts
+                self.redis.publish("violations:alerts", payload_str)
             except Exception:
-                logger.exception("Lỗi khi đẩy vi phạm vào Redis queue")
+                logger.exception("Lỗi khi đẩy vi phạm vào Redis queue/pubsub")
 
 #************************************************************************ Script for testing *******************************************************
 if __name__ == "__main__":

@@ -84,9 +84,40 @@ class SettingMetricTransport:
                         0.066,
                         0.029
                         ]
-    MODELS_PATH = os.path.join(BASE_DIR, 'ai_models', 'model N', 'openvino models', 'prune_40%_int8_openvino_model')
+    HOMOGRAPHY_MATRICES = [
+        # Dummy matrices for 5 test videos - should be calibrated using getPerspectiveTransform
+        np.array([[0.034, 0, 0], [0, 0.034, 0], [0, 0, 1]], dtype=np.float32),
+        np.array([[0.036, 0, 0], [0, 0.036, 0], [0, 0, 1]], dtype=np.float32),
+        np.array([[0.018, 0, 0], [0, 0.018, 0], [0, 0, 1]], dtype=np.float32),
+        np.array([[0.066, 0, 0], [0, 0.066, 0], [0, 0, 1]], dtype=np.float32),
+        np.array([[0.029, 0, 0], [0, 0.029, 0], [0, 0, 1]], dtype=np.float32),
+    ]
+    MODELS_PATH = os.path.join(BASE_DIR, 'ai_models', 'model N', 'original model', 'best.pt')
 
-    DEVICE = 'cpu'
+    # ═══════════════ Giai đoạn 3: GPU & Advanced Settings ═══════════════
+    # GPU mode: khi True, dùng CUDA device, BoT-SORT tracker, batch inference
+    GPU_ENABLED = _env_bool("GPU_ENABLED", "false")
+    DEVICE = 'cuda' if GPU_ENABLED else 'cpu'
+
+    # Tracker mode: 'bytetrack' (CPU, nhẹ) hoặc 'botsort' (GPU, có ReID)
+    # Tự động chọn theo GPU_ENABLED nếu không set
+    TRACKER_MODE = os.getenv("TRACKER_MODE", "botsort" if GPU_ENABLED else "bytetrack")
+
+    # License plate detection model riêng (YOLOv8n-lp)
+    # Đặt None để tự tìm trong ai_models/license_plate/, hoặc đường dẫn cụ thể
+    LP_MODEL_PATH = os.getenv("LP_MODEL_PATH", None)
+
+    # MinIO retention: số ngày giữ lại frames/evidence images
+    MINIO_RETENTION_DAYS = _env_int("MINIO_RETENTION_DAYS", 30)
+
+    # Batch inference server: bật/tắt kiến trúc GPU trung tâm
+    BATCH_INFERENCE_ENABLED = _env_bool("BATCH_INFERENCE_ENABLED", "false")
+
+    # --- Tối ưu Batch Inference cho đa luồng (Multi-Camera) ---
+    # Mặc định lấy theo số lượng camera đang cấu hình (len(PATH_VIDEOS))
+    INFERENCE_BATCH_SIZE = _env_int("INFERENCE_BATCH_SIZE", len(PATH_VIDEOS))
+    # Thời gian chờ gom batch tối đa: 40ms đủ gom 5 frames nếu các luồng chạy ~25-30fps
+    INFERENCE_MAX_WAIT_MS = _env_int("INFERENCE_MAX_WAIT_MS", 40)
 
 class SettingChatBot:
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -138,5 +169,19 @@ TRAFFIC_THRESHOLDS: Dict[str, RoadThreshold] = {
 }
 
 DEFAULT_THRESHOLD: RoadThreshold = {"v": 15, "c1": 15, "c2": 25}
+
+# ================= Speed Limits (per-road) =================
+# Ngưỡng tốc độ tối đa cho phép theo từng tuyến đường (km/h)
+# Xe vượt quá ngưỡng này sẽ được ghi nhận vi phạm "speeding"
+# Đặt 0 để tắt kiểm tra tốc độ cho tuyến đường đó
+SPEED_LIMITS: Dict[str, float] = {
+    "Đường Láng":       60.0,  # Đường nội đô, 60 km/h
+    "Ngã Tư Sở":        40.0,  # Giao lộ, giới hạn thấp hơn
+    "Nguyễn Trãi":      60.0,
+    "Văn Quán":         40.0,  # Đường khu dân cư
+    "Nguyễn Văn Trỗi":  60.0,
+}
+
+DEFAULT_SPEED_LIMIT: float = 50.0  # km/h — dùng khi không tìm thấy road name
 
 

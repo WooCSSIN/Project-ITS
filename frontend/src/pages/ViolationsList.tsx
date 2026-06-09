@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, CheckCircle, XCircle, RefreshCcw } from "lucide-react";
+import { AlertTriangle, CheckCircle, XCircle, RefreshCcw, Wifi, WifiOff } from "lucide-react";
 import { Button } from "@/ui/button";
 import { endpoints } from "@/config";
+import { useWebSocket } from "@/hooks/useWebSocket";
 
 interface Violation {
   id: number;
@@ -54,6 +55,13 @@ export default function ViolationsList() {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const navigate = useNavigate();
 
+  // Task 19.2: WebSocket subscription for realtime violation updates
+  const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
+  const { data: wsData, isConnected, error: wsError } = useWebSocket(
+    endpoints.violationsWs,
+    { authToken: token, maxReconnectAttempts: 10 }
+  );
+
   const fetchViolations = async () => {
     setLoading(true);
     try {
@@ -75,12 +83,34 @@ export default function ViolationsList() {
     fetchViolations();
   }, [statusFilter]);
 
+  // Task 19.3: Auto-prepend new violations from WebSocket
+  useEffect(() => {
+    if (wsData !== null && wsData !== undefined) {
+      const newViolation = wsData as Violation;
+      if (statusFilter === "" || newViolation.status === statusFilter) {
+        setViolations(prev => [newViolation, ...prev]);
+      }
+    }
+  }, [wsData]);
+
   return (
     <div className="p-6 h-full flex flex-col gap-6 animate-in fade-in duration-300">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Xử Phạt Nguội</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold tracking-tight">Xử Phạt Nguội</h1>
+            {/* Task 19.4: WebSocket connection indicator */}
+            {isConnected ? (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-500/20 text-green-500" title="WebSocket đang kết nối">
+                <Wifi size={12} /> Realtime
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-500/20 text-yellow-500" title={wsError || "Chưa kết nối WebSocket"}>
+                <WifiOff size={12} /> Offline
+              </span>
+            )}
+          </div>
           <p className="text-muted-foreground text-sm mt-1">
             Quản lý các phương tiện vi phạm giao thông được hệ thống AI phát hiện.
           </p>

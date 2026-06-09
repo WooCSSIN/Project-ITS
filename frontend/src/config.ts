@@ -71,6 +71,7 @@ class WebSocketConfig {
   INFO_PATH = "/road/ws/info";
   CHART_PATH = "/road/ws/chart";
   ADMIN_RESOURCES_PATH = "/admin/ws/resources";
+  VIOLATIONS_PATH = "/road/ws/violations";
   WEBRTC_FRAMES_OFFER_PATH = "/road/webrtc/offer";
 
   // Full WebSocket URLs
@@ -171,6 +172,7 @@ export const endpoints = {
   violations: `${apiConfig.API_HTTP_BASE}/violations`,
   violation: (id: number | string) => `${apiConfig.API_HTTP_BASE}/violations/${id}`,
   violationExportPdf: (id: number | string) => `${apiConfig.API_HTTP_BASE}/violations/${id}/export-pdf`,
+  violationsWs: `${apiConfig.API_WS_BASE}${wsConfig.VIOLATIONS_PATH}`,
 
   // Zone Configuration (Cấu hình vùng cảnh báo)
   zones: `${apiConfig.API_HTTP_BASE}/zones`,
