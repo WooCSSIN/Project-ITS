@@ -41,8 +41,8 @@ def avg_none_zero_batch(
     """
     # Sử dụng list comprehension nhanh, tránh tạo numpy array không cần thiết
     def _avg(lst):
-        non_zero = [x for x in lst if x > 1]
-        return (sum(non_zero) // len(non_zero)) if non_zero else 0
+        non_zero = [x for x in lst if x != 0]
+        return (sum(non_zero) / len(non_zero)) if non_zero else 0
 
     return (
         _avg(car_counts),
@@ -124,7 +124,8 @@ def enrich_info_with_thresholds(data: Dict[str, Any], road_name: str) -> Dict[st
         else:
             density_status = "Thông thoáng"
 
-        avg_speed = (speed_car + speed_motor) / 2 if (speed_car or speed_motor) else 0
+        speeds = [s for s in (speed_car, speed_motor) if s > 0]
+        avg_speed = sum(speeds) / len(speeds) if speeds else 0
         speed_status = "Nhanh chóng" if avg_speed >= threshold["v"] else "Chậm chạp"
 
         # Attach computed fields

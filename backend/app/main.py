@@ -30,11 +30,7 @@ async def lifespan(app: FastAPI):
         logger.exception("Failed to initialize database tables: %s", e)
         raise
 
-    # Start ViolationWorker
-    from services.road_services.violation_worker import ViolationWorker
-    v1.state.violation_worker = ViolationWorker()
-    await v1.state.violation_worker.start()
-    logger.info("ViolationWorker started.")
+
 
     try:
         yield
@@ -47,8 +43,7 @@ async def lifespan(app: FastAPI):
                 logger.exception("Failed to close chat agent resources")
         if v1.state.traffic_history_worker:
             await v1.state.traffic_history_worker.stop()
-        if v1.state.violation_worker:
-            await v1.state.violation_worker.stop()
+
         if v1.state.analyzer:
             v1.state.analyzer.cleanup_processes()
 
@@ -134,16 +129,4 @@ app.include_router(
     tags=["Admin Tools"],
 )
 
-from api.v1 import api_violations
-app.include_router(
-    router= api_violations.router,
-    prefix="/api/v1/violations", 
-    tags=["Violations Management"],
-)
 
-from api.v1 import api_zones
-app.include_router(
-    router= api_zones.router,
-    prefix="/api/v1/zones",
-    tags=["Zone Configuration"],
-)

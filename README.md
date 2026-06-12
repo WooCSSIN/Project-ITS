@@ -2,7 +2,7 @@
 
 **Tác giả:** Hà Nhật Nguyên Vũ — vuhnn6145@gmail.com
 
-Hệ thống giám sát giao thông thông minh sử dụng AI để nhận diện và theo dõi phương tiện theo thời gian thực. Cung cấp dashboard trực quan, REST/WebSocket API, Discord Bot, và AI chatbot hỗ trợ truy vấn bằng ngôn ngữ tự nhiên.
+Hệ thống giám sát giao thông thông minh sử dụng AI tập trung vào việc nhận diện, đếm lưu lượng và ước tính vận tốc phương tiện theo thời gian thực. Cung cấp dashboard trực quan, REST/WebSocket API, Discord Bot, và AI chatbot hỗ trợ truy vấn bằng ngôn ngữ tự nhiên.
 
 ## Architecture Overview
 

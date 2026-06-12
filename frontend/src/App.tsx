@@ -23,8 +23,6 @@ import {
   ShieldCheck,
   ChevronLeft,
   ChevronRight,
-  AlertTriangle,
-  Map,
 } from "lucide-react";
 import { clearAllChatData } from "@/utils/chatStorage";
 import LoginPage from "./pages/LoginPage";
@@ -35,9 +33,6 @@ import ProfilePage from "./pages/ProfilePage";
 import ProtectedRoute from "@/modules/features/auth/guards/ProtectedRoute";
 import AdminResourcesPage from "@/pages/AdminResourcesPage";
 import AdminRoadsPage from "@/pages/AdminRoadsPage";
-import ViolationsList from "@/pages/ViolationsList";
-import ViolationDetail from "@/pages/ViolationDetail";
-import ZoneConfig from "@/pages/ZoneConfig";
 import { authConfig } from "@/config";
 import "./App.css";
 import { TrafficProvider } from "@/hooks/useTrafficStore";
@@ -52,8 +47,6 @@ const navItems: NavItem[] = [
   { to: "/home", label: "Trang Chủ", icon: Home },
   { to: "/analys", label: "Phân Tích", icon: BarChart3 },
   { to: "/chat", label: "Trợ Lý AI", icon: Bot },
-  { to: "/violations", label: "Xử Phạt", icon: AlertTriangle },
-  { to: "/zones", label: "Cấu hình Vùng", icon: Map },
 ];
 
 export default function App() {
@@ -249,9 +242,6 @@ function AppContent() {
               <Route path="/home" element={<TrafficDashboard />} />
               <Route path="/analys" element={<AnalyticsPage />} />
               <Route path="/chat" element={<ChatPage />} />
-              <Route path="/violations" element={<ViolationsList />} />
-              <Route path="/violations/:id" element={<ViolationDetail />} />
-              <Route path="/zones" element={<ZoneConfig />} />
               <Route path="/profile" element={<ProfilePage />} />
               <Route path="/admin" element={<Navigate to="/admin/resources" replace />} />
               <Route path="/admin/resources" element={<AdminResourcesPage />} />

@@ -344,17 +344,18 @@ class InferenceClient:
             _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
             frame_bytes = jpeg.tobytes()
 
-            # Lưu frame bytes vào key tạm
+            # Lưu frame bytes vào key tạm và đẩy metadata qua pipeline để tránh race condition
             frame_key = f"inference:frame:{self.camera_id}"
-            self._redis.setex(frame_key, 5, frame_bytes)
-
-            # Đẩy metadata vào queue
             meta = json.dumps({
                 "camera_id": self.camera_id,
                 "frame_shape": list(frame.shape),
                 "timestamp": time.time(),
             })
-            self._redis.lpush(INFERENCE_REQUEST_QUEUE, meta)
+            
+            pipe = self._redis.pipeline()
+            pipe.setex(frame_key, 5, frame_bytes)
+            pipe.lpush(INFERENCE_REQUEST_QUEUE, meta)
+            pipe.execute()
 
             return True
 

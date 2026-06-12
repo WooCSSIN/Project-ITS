@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 import numpy as np
+import cv2
 from urllib.parse import quote_plus
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -85,12 +86,36 @@ class SettingMetricTransport:
                         0.029
                         ]
     HOMOGRAPHY_MATRICES = [
-        # Dummy matrices for 5 test videos - should be calibrated using getPerspectiveTransform
-        np.array([[0.034, 0, 0], [0, 0.034, 0], [0, 0, 1]], dtype=np.float32),
-        np.array([[0.036, 0, 0], [0, 0.036, 0], [0, 0, 1]], dtype=np.float32),
-        np.array([[0.018, 0, 0], [0, 0.018, 0], [0, 0, 1]], dtype=np.float32),
-        np.array([[0.066, 0, 0], [0, 0.066, 0], [0, 0, 1]], dtype=np.float32),
-        np.array([[0.029, 0, 0], [0, 0.029, 0], [0, 0, 1]], dtype=np.float32),
+        # Ma trận homography thực tế được tính bằng cv2.getPerspectiveTransform
+        # Source = 4 góc vng ROI (pixel), Dst = tọa độ mét thực tế (top-down)
+        # Các giá trị dst giả định: đường rộng 12m, chiều sâu ~25-35m tính từ góc quan sát
+
+        # 0: Văn Quán  REGION=[[0,400],[190,190],[440,190],[600,400]]
+        cv2.getPerspectiveTransform(
+            np.float32([[0, 400], [190, 190], [440, 190], [600, 400]]),
+            np.float32([[0, 0],   [0, 30],    [12, 30],   [12, 0]])
+        ),
+        # 1: Nguyễn Văn Trỗi  REGION=[[0,400],[120,190],[480,190],[600,400]]
+        cv2.getPerspectiveTransform(
+            np.float32([[0, 400], [120, 190], [480, 190], [600, 400]]),
+            np.float32([[0, 0],   [0, 30],    [12, 30],   [12, 0]])
+        ),
+        # 2: Nguyễn Trãi  REGION=[[0,400],[0,180],[150,70],[480,70],[600,260],[600,400]]
+        # Dùng 4 điểm góc (đầu & cuối)
+        cv2.getPerspectiveTransform(
+            np.float32([[0, 400], [0, 180], [600, 260], [600, 400]]),
+            np.float32([[0, 0],   [0, 35],  [12, 35],   [12, 0]])
+        ),
+        # 3: Ngã Tư Sở  REGION=[[140,400],[400,200],[550,200],[530,400]]
+        cv2.getPerspectiveTransform(
+            np.float32([[140, 400], [400, 200], [550, 200], [530, 400]]),
+            np.float32([[0, 0],     [0, 28],    [10, 28],   [10, 0]])
+        ),
+        # 4: Đường Láng  REGION=[[150,400],[300,200],[580,200],[600,400]]
+        cv2.getPerspectiveTransform(
+            np.float32([[150, 400], [300, 200], [580, 200], [600, 400]]),
+            np.float32([[0, 0],     [0, 30],    [12, 30],   [12, 0]])
+        ),
     ]
     MODELS_PATH = os.path.join(BASE_DIR, 'ai_models', 'model N', 'original model', 'best.pt')
 

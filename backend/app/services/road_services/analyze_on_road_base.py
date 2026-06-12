@@ -11,8 +11,6 @@ from typing import Optional
 from ultralytics import solutions
 from utils.transport_utils import avg_none_zero_batch
 from core.config import settings_metric_transport
-from core.violation_engine import ViolationEngine
-from core.anpr import ANPREngine
 logger = logging.getLogger(__name__)
 
 
@@ -75,10 +73,8 @@ class HomographySpeedTracker:
             self.speeds[track_id] = 0.0
             return 0.0
 
-        # Khoảng cách từ điểm đầu tới điểm cuối trong lịch sử
-        dx = hist[-1][0] - hist[0][0]
-        dy = hist[-1][1] - hist[0][1]
-        dist_m = np.sqrt(dx*dx + dy*dy)
+        # Khoảng cách lũy kế qua các điểm (path length) thay vì đường thẳng (displacement)
+        dist_m = sum(np.sqrt((hist[i][0]-hist[i-1][0])**2 + (hist[i][1]-hist[i-1][1])**2) for i in range(1, len(hist)))
 
         time_elapsed = (len(hist) - 1) / self.fps
         speed_mps = dist_m / time_elapsed if time_elapsed > 0 else 0
@@ -200,39 +196,8 @@ class AnalyzeOnRoadBase:
         self.classes = None
         self.ids_old = set()
 
-        # Khởi tạo Violation Engine & ANPR
-        # camera_id = 1-based index trong PATH_VIDEOS — nhất quán với frontend ZoneConfig.tsx
-        # Frontend dùng `idx + 1`, backend phải dùng cùng công thức để zone load đúng
-        try:
-            cam_idx = settings_metric_transport.PATH_VIDEOS.index(self.path_video)
-            cam_id = cam_idx + 1
-        except ValueError:
-            # Fallback: video không nằm trong PATH_VIDEOS (stream URL hoặc camera mới)
-            # Dùng hash offset cao để tránh trùng với range 1..len(PATH_VIDEOS)
-            cam_id = abs(hash(self.name)) % (10 ** 4) + len(settings_metric_transport.PATH_VIDEOS)
-            logger.warning(
-                "Video '%s' không tìm thấy trong PATH_VIDEOS. Dùng fallback camera_id=%d",
-                self.path_video, cam_id
-            )
-        
-        # Lấy speed limit từ SPEED_LIMITS config per-road
-        from core.config import SPEED_LIMITS, DEFAULT_SPEED_LIMIT
-        speed_limit = SPEED_LIMITS.get(self.name, DEFAULT_SPEED_LIMIT)
-        
-        self.violation_engine = ViolationEngine(camera_id=cam_id, speed_limit_kmh=speed_limit)
-        
-        # ViolationEngine khởi tạo với mọi zones=None và is_red_light_on=False (mặc định đúng)
-        # Zone thực tế sẽ được load từ DB bởi _load_zones_from_db() trong AnalyzeOnRoad.__init__()
-        # KHÔNG tạo mock zone — đã gây ra >11.000 vi phạm giả trong production
-
-        self.anpr_engine = ANPREngine(use_gpu=False)
-
         # --- Speed smoother: EMA per track_id ---
         self.speed_smoother = SpeedSmoother(alpha=0.3)
-
-        # --- ANPR ThreadPoolExecutor: tách ANPR ra khỏi processing loop ---
-        # max_workers=1: ANPR chạy tuần tự để không tranh CPU với YOLO inference
-        self._anpr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="anpr")
 
         # --- Adaptive frame skipping ---
         self._base_infer_every_n = max(1, int(infer_every_n_frames))
@@ -272,76 +237,6 @@ class AnalyzeOnRoadBase:
     def _push_violations_to_queue(self, new_violations: list):
         """No-op mặc định. Được override bởi AnalyzeOnRoad (có Redis) để đẩy vi phạm vào queue."""
         pass
-
-    def _crop_and_upload_evidence(
-        self,
-        frame: np.ndarray,
-        box: tuple,
-        camera_id: int,
-        margin: float = 0.05,
-    ) -> Optional[str]:
-        """
-        Crop vùng xe vi phạm từ frame và upload lên MinIO.
-        Chạy trong ANPR ThreadPoolExecutor — không block video processing loop.
-
-        Args:
-            frame: Frame gốc (BGR numpy array)
-            box: Bounding box (x1, y1, x2, y2) của xe vi phạm
-            camera_id: ID camera (dùng cho log)
-            margin: Padding quanh bounding box (5% mặc định)
-
-        Returns:
-            URL ảnh trên MinIO, hoặc None nếu upload thất bại (graceful fallback)
-        """
-        try:
-            from utils.minio_image_store import minio_image_store
-
-            if frame is None or frame.size == 0:
-                return None
-
-            h, w = frame.shape[:2]
-            x1, y1, x2, y2 = box
-
-            # Thêm margin và clamp vào bounds frame
-            bw = x2 - x1
-            bh = y2 - y1
-            mx = int(bw * margin)
-            my = int(bh * margin)
-            cx1 = max(0, x1 - mx)
-            cy1 = max(0, y1 - my)
-            cx2 = min(w, x2 + mx)
-            cy2 = min(h, y2 + my)
-
-            # Validate crop area không rỗng
-            if cx2 <= cx1 or cy2 <= cy1:
-                logger.warning(
-                    "evidence crop: invalid box after margin clamp "
-                    "camera=%s box=%s → (%d,%d,%d,%d)",
-                    camera_id, box, cx1, cy1, cx2, cy2
-                )
-                return None
-
-            crop = frame[cy1:cy2, cx1:cx2]
-
-            # Encode sang JPEG bytes (quality 85 — balance size và quality)
-            success, jpeg_buf = cv2.imencode(
-                ".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 85]
-            )
-            if not success:
-                logger.warning("evidence crop: cv2.imencode failed camera=%s", camera_id)
-                return None
-
-            url = minio_image_store.upload_road_frame(self.name, jpeg_buf.tobytes())
-            logger.info(
-                "evidence uploaded camera=%s url=%s", camera_id, url[:60] if url else None
-            )
-            return url
-
-        except Exception as e:
-            logger.warning(
-                "evidence upload failed camera=%s: %s", camera_id, e
-            )
-            return None
 
     def _get_adaptive_skip_factor(self) -> int:
         """Tự động điều chỉnh số frame bỏ qua dựa trên CPU load hiện tại.
@@ -421,57 +316,16 @@ class AnalyzeOnRoadBase:
                     res = self.inference_client.get_result(timeout_ms=100)
                     if res:
                         self._apply_server_results(res)
-                        use_local = False
-                    # else: timeout → drop frame (khong chay fallback de giu FPS)
+                    use_local = False # Always disable local if we submitted to server, to avoid ID clashes
                 
             if use_local:
                 # Fallback: chạy inference local (như cũ)
                 self.speed_tool.process(self.frame_predict.copy())
                 self.post_processing()
             
-            # --- TÍCH HỢP VIOLATION & ANPR ---
-            if self.ids is not None and len(self.ids) > 0:
-                new_violations = self.violation_engine.process_frame_tracking(
-                    frame=self.frame_output,
-                    track_ids=self.ids,
-                    boxes=self.boxes,
-                    classes=self.classes,
-                    speeds=self.speeds
-                )
-                if new_violations:
-                    # Chạy ANPR bất đồng bộ trong ThreadPoolExecutor
-                    # → không block processing loop, tránh EasyOCR làm lag toàn bộ pipeline
-                    frame_copy = self.frame_output.copy()  # Copy để tránh race condition
-                    violations_copy = [v.copy() for v in new_violations]
-
-                    def _run_anpr_and_push(frame, violations):
-                        """Hàm chạy trong worker thread: đọc biển số, upload ảnh bằng chứng và push vi phạm."""
-                        for v in violations:
-                            try:
-                                plate = self.anpr_engine.read_license_plate(frame, v["box"])
-                                v["license_plate"] = plate
-                                logger.warning(
-                                    "🚨 PHÁT HIỆN VI PHẠM: %s - Biển số: %s - Camera: %s",
-                                    v['violation_type'], plate, self.name
-                                )
-                            except Exception:
-                                logger.exception("ANPR lỗi cho vi phạm %s", v.get("violation_type"))
-
-                            # Upload ảnh bằng chứng lên MinIO (graceful — không block, không crash)
-                            evidence_url = self._crop_and_upload_evidence(
-                                frame, v["box"], v.get("camera_id", 0)
-                            )
-                            v["evidence_image_url"] = evidence_url
-
-                        self._push_violations_to_queue(violations)
-
-                    self._anpr_executor.submit(_run_anpr_and_push, frame_copy, violations_copy)
-            
             # Vẽ đè lên hình các thông tin
             if self.is_draw:
                 self.draw_info_to_frame_output()
-                # Vẽ thêm các zone vi phạm (nếu có) để test
-                self.frame_output = self.violation_engine.draw_zones(self.frame_output)
 
             # Cập nhật data
             self.update_data()
@@ -506,7 +360,9 @@ class AnalyzeOnRoadBase:
         cx_arr = (boxes[:, 0] + boxes[:, 2]) / 2.0
         cy_arr = (boxes[:, 1] + boxes[:, 3]) / 2.0
 
-        self.homography_tracker.set_fps(self._actual_fps)
+        # Cập nhật FPS thực tế theo tốc độ infer (frame skip)
+        skip = getattr(self, 'current_skip', 1)
+        self.homography_tracker.set_fps(self._actual_fps / skip)
 
         smoothed_speeds: dict[int, float] = {}
         for i, track_id in enumerate(ids):
@@ -585,8 +441,9 @@ class AnalyzeOnRoadBase:
             cx_arr = (boxes[:, 0] + boxes[:, 2]) / 2.0
             cy_arr = (boxes[:, 1] + boxes[:, 3]) / 2.0
 
-            # Cập nhật FPS thực tế cho tracker
-            self.homography_tracker.set_fps(self._actual_fps)
+            # Cập nhật FPS thực tế cho tracker theo tốc độ infer
+            skip = getattr(self, 'current_skip', 1)
+            self.homography_tracker.set_fps(self._actual_fps / skip)
 
             # Áp dụng SpeedSmoother (EMA) lên homography speeds để giảm jitter
             smoothed_speeds: dict[int, float] = {}
@@ -646,7 +503,7 @@ class AnalyzeOnRoadBase:
                     speed_id = self.speeds.get(track_id, 0)
 
                     color = self.color_motor if class_id == 1 else self.color_car
-                    label = f"{speed_id} km/h"
+                    label = f"{speed_id:.1f} km/h"
 
                     cx_global = cx[idx]
                     cy_global = cy[idx]
@@ -661,6 +518,7 @@ class AnalyzeOnRoadBase:
                         self.font_thickness,
                     )
                     cv2.circle(self.frame_output, (cx_global, cy_global), 5, color, -1)
+                    cv2.rectangle(self.frame_output, (int(x1[idx]), int(y1[idx])), (int(x2[idx]), int(y2[idx])), color, 2)
 
             cv2.polylines(self.frame_output, [self.region_pts],
                          isClosed=True, color=self.color_region, thickness=4)
@@ -759,13 +617,20 @@ class AnalyzeOnRoadBase:
 
                 cap = cv2.resize(cap, target_size)
 
-                # FPS calculation - optimized
-                time_now = datetime.now()
-                delta_time = (time_now - self.time_pre_for_fps).total_seconds()
-                fps = round(1 / delta_time) if delta_time > 0 else 0
-                self.time_pre_for_fps = time_now
-
-                self._actual_fps = fps if fps > 0 else 30.0
+                if cam is not None and cam.isOpened():
+                    vid_fps = cam.get(cv2.CAP_PROP_FPS)
+                    if vid_fps > 0 and not is_network_stream:
+                        self._actual_fps = vid_fps
+                        fps = round(vid_fps)
+                    else:
+                        time_now = datetime.now()
+                        delta_time = (time_now - self.time_pre_for_fps).total_seconds()
+                        fps = round(1 / delta_time) if delta_time > 0 else 0
+                        self.time_pre_for_fps = time_now
+                        self._actual_fps = fps if fps > 0 else 30.0
+                else:
+                    fps = 30
+                    self._actual_fps = 30.0
 
                 cvzone.putTextRect(cap, f"FPS: {fps}",
                                  (516, 20),
@@ -777,8 +642,8 @@ class AnalyzeOnRoadBase:
 
                 # Chỉ infer mỗi N frame để giảm tải (N được điều chỉnh tự động theo CPU load)
                 self.frame_count += 1
-                current_skip = self._get_adaptive_skip_factor()
-                if self.frame_count % current_skip == 0:
+                self.current_skip = self._get_adaptive_skip_factor()
+                if self.frame_count % self.current_skip == 0:
                     self.process_single_frame(cap)
                 else:
                     # Không infer ở frame này, ghi đè trace cũ lên frame mới
@@ -802,12 +667,7 @@ class AnalyzeOnRoadBase:
                 cam.release()
             if self.show:
                 cv2.destroyAllWindows()
-            # Tắt ANPR executor sạch sẽ (không cancel job đang chạy)
-            try:
-                self._anpr_executor.shutdown(wait=False, cancel_futures=False)
-            except TypeError:
-                # Python < 3.9 không có cancel_futures param
-                self._anpr_executor.shutdown(wait=False)
+
 
 #************************************************************************ Script for testing *******************************************************
 if __name__ == "__main__":
