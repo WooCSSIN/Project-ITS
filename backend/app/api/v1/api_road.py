@@ -61,7 +61,7 @@ async def _shutdown_webrtc_connections() -> None:
 
 
 @router.post(
-    "/webrtc/offer/{road_name}",
+    "/road/webrtc/offer/{road_name}",
     response_model=WebRTCSessionDescriptionResponse,
 )
 async def webrtc_offer(
