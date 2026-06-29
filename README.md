@@ -6,7 +6,7 @@ Hệ thống giám sát giao thông thông minh sử dụng AI tập trung vào 
 
 ## Architecture Overview
 
-![](./.github/architech.png)
+![](./.github/architecture_system.png)
 
 ## Short Demo
 
