@@ -145,14 +145,30 @@ class SettingMetricTransport:
     INFERENCE_MAX_WAIT_MS = _env_int("INFERENCE_MAX_WAIT_MS", 40)
 
 class SettingChatBot:
-    from langchain_google_genai import ChatGoogleGenerativeAI
+    # Lazy import để tránh crash khi thiếu langchain (chỉ cần cho chatbot)
+    LLM = None
 
-    LLM = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview",
-                                temperature=0.4, 
-                                max_output_tokens=1024
-                                )
+    @classmethod
+    def get_llm(cls):
+        """Lazy load LLM - chỉ import khi thực sự cần dùng."""
+        if cls.LLM is None:
+            try:
+                from langchain_google_genai import ChatGoogleGenerativeAI
+                cls.LLM = ChatGoogleGenerativeAI(
+                    model="gemini-3.1-flash-lite-preview",
+                    temperature=0.4,
+                    max_output_tokens=1024,
+                )
+            except ImportError:
+                logger = __import__('logging').getLogger(__name__)
+                logger.warning(
+                    "langchain_google_genai not installed, chatbot will not work. "
+                    "Install with: pip install langchain-google-genai"
+                )
+                cls.LLM = None
+        return cls.LLM
     # Dùng ollama local api llm
-    
+
     # from langchain_openai import ChatOpenAI
     # LLM = ChatOpenAI(
     #     model="gemma4:e4b",
@@ -167,9 +183,50 @@ class SettingNetwork:
 
 settings_server = SettingServer()
 settings_metric_transport = SettingMetricTransport()
-settings_chat_bot = SettingChatBot()
+settings_chatbot = SettingChatBot()  # Tên chuẩn duy nhất
 settings_network = SettingNetwork()
-setting_chatbot = SettingChatBot()
+
+
+class SettingViolation:
+    """Cấu hình cho Violation Worker."""
+    ENABLED = _env_bool("VIOLATION_WORKER_ENABLED", "true")
+    QUEUE_KEY = os.getenv("VIOLATION_QUEUE_KEY", "violations:queue")
+    ALERTS_CHANNEL = os.getenv("VIOLATION_ALERTS_CHANNEL", "violations:alerts")
+    QUEUE_MAX_SIZE = max(100, _env_int("VIOLATION_QUEUE_MAX_SIZE", 1000))
+    DEFAULT_SPEED_LIMIT = float(os.getenv("DEFAULT_SPEED_LIMIT", "50"))
+
+
+class SettingMetrics:
+    """Cấu hình cho monitoring."""
+    METRICS_ENABLED = _env_bool("METRICS_ENABLED", "true")
+    HEALTH_DETAILED_ENABLED = _env_bool("HEALTH_DETAILED_ENABLED", "true")
+
+
+class SettingSecurity:
+    """Cấu hình bảo mật."""
+    RATE_LIMIT_PER_MINUTE = max(10, _env_int("RATE_LIMIT_PER_MINUTE", 60))
+    WS_MAX_CONNECTIONS_PER_IP = max(1, _env_int("WS_MAX_CONNECTIONS_PER_IP", 5))
+    # CORS allowed origins - lấy từ env, fallback default localhost
+    CORS_ALLOWED_ORIGINS = [
+        o.strip()
+        for o in os.getenv(
+            "CORS_ALLOWED_ORIGINS",
+            "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
+        ).split(",")
+        if o.strip()
+    ]
+
+
+class SettingFeatures:
+    """Feature flags."""
+    ANPR_ENABLED = _env_bool("ANPR_ENABLED", "false")
+    DISCORD_ALERTS_ENABLED = _env_bool("DISCORD_ALERTS_ENABLED", "false")
+
+
+settings_violation = SettingViolation()
+settings_metrics = SettingMetrics()
+settings_security = SettingSecurity()
+settings_features = SettingFeatures()
 
 # ================= Traffic Thresholds (per-road) =================
 # v: average speed threshold (km/h) - >= v => fast, else slow

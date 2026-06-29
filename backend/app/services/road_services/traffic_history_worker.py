@@ -104,3 +104,7 @@ class TrafficHistoryWorker:
 
         self._process = None
         self._stop_event = None
+
+    def is_alive(self) -> bool:
+        """Check worker có đang chạy không."""
+        return self._process is not None and self._process.is_alive()

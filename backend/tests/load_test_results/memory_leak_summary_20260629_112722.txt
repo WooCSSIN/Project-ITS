@@ -1,0 +1,37 @@
+================================================================================
+MEMORY LEAK LOAD TEST - SUMMARY REPORT
+================================================================================
+
+Test duration: 60 seconds (0.02 hours)
+Total samples collected: 3
+Total iterations: 1758
+
+--- MEMORY ANALYSIS ---
+Verdict: [OK] NO LEAK DETECTED
+  reason: Not enough samples
+
+--- LATENCY ANALYSIS ---
+  Mean latency: 6.63 ms
+  Median latency: 6.34 ms
+  Min latency: 3.18 ms
+  Max latency: 115.79 ms
+  P95 latency: 9.55 ms
+  P99 latency: 14.49 ms
+  Std dev: 3.44 ms
+
+--- FINAL STATE ---
+  rss_mb: 56.70
+  vms_mb: 394.72
+  cpu_percent: 0.00
+  threads: 14
+  traced_memory_mb: 5.46
+  speed_smoother_tracks: 100
+  homography_tracks: 100
+  homography_max_hist: 15
+  engine_stationary_tracked: 0
+  timestamp: 2026-06-29T11:28:22.972948
+  elapsed_seconds: 60.00
+  iteration: 1758
+
+================================================================================
+Report generated at: 2026-06-29T11:28:23.076715

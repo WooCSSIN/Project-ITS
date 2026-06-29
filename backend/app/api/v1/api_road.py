@@ -32,34 +32,6 @@ logger = get_logger(__name__)
 active_peer_connections: set[RTCPeerConnection] = set()
 
 
-@router.on_event("startup")
-async def _startup_traffic_runtime() -> None:
-    try:
-        if v1.state.analyzer is None:
-            v1.state.analyzer = AnalyzeOnRoadForMultiprocessing()
-            v1.state.analyzer.run_multiprocessing()
-
-        if v1.state.traffic_history_worker is None:
-            v1.state.traffic_history_worker = TrafficHistoryWorker()
-            await v1.state.traffic_history_worker.start()
-        logger.info("Traffic runtime started successfully")
-    except Exception as exc:
-        if v1.state.analyzer is not None:
-            try:
-                v1.state.analyzer.cleanup_processes()
-            except Exception:
-                pass
-        logger.exception("Traffic startup degraded (Redis unavailable): %s", exc)
-        v1.state.analyzer = None
-        v1.state.traffic_history_worker = None
-
-
-@router.on_event("shutdown")
-async def _shutdown_webrtc_connections() -> None:
-    for pc in list(active_peer_connections):
-        await close_peer_connection(pc)
-
-
 @router.post(
     "/road/webrtc/offer/{road_name}",
     response_model=WebRTCSessionDescriptionResponse,
@@ -226,7 +198,12 @@ async def websocket_info(
 
 
 @router.websocket("/ws/chart/{road_name}")
-async def websocket_chart(websocket: WebSocket, road_name: str):
+async def websocket_chart(
+    websocket: WebSocket,
+    road_name: str,
+    current_user=Depends(get_current_user_ws),
+):
+    _ = current_user  # Auth đã được thực hiện bởi dependency
     await websocket.accept()
     logger.info("chart websocket connected road=%s", road_name)
 
@@ -256,8 +233,14 @@ async def websocket_chart(websocket: WebSocket, road_name: str):
         logger.info("chart websocket disconnected road=%s", road_name)
     except Exception as exc:
         logger.exception("chart websocket error road=%s error=%s", road_name, exc)
-        await websocket.send_json({"detail": f"Internal error: {str(exc)}"})
-        await websocket.close()
+        try:
+            await websocket.send_json({"detail": f"Internal error: {str(exc)}"})
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 

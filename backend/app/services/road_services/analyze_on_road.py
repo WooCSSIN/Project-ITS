@@ -90,7 +90,10 @@ class AnalyzeOnRoad(AnalyzeOnRoadBase):
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             self.redis.setex(self.info_key, self.info_ttl_seconds, json.dumps(payload, ensure_ascii=False))
+            # Giới hạn queue size để tránh OOM Redis (giữ tối đa 1000 records)
+            # Nếu worker DB chậm, sẽ drop records cũ thay vì phình to queue
             self.redis.lpush(self.history_queue_key, json.dumps({"road_name": self.name, **payload}, ensure_ascii=False))
+            self.redis.ltrim(self.history_queue_key, 0, 999)  # Giữ 1000 records mới nhất
         except Exception:
             logger.exception("Loi khi update thong tin phuong tien cua %s", self.name)
 

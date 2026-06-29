@@ -262,7 +262,21 @@ class AnalyzeOnRoadForMultiprocessing():
             self.log_process.join(timeout=2)
             if self.log_process.is_alive():
                 self.log_process.kill()
+                self.log_process.join(timeout=2)
+            # Đóng process handle để giải phóng file descriptor
+            try:
+                self.log_process.close()
+            except Exception:
+                pass
         self.log_process = None
+
+        # Đóng Redis client connection pool để tránh leak
+        try:
+            if self.redis_client is not None:
+                self.redis_client.close()
+                logger.info("Redis client connection pool closed")
+        except Exception:
+            logger.exception("Failed to close redis client")
 
         logger.info("All traffic processes stopped")
 

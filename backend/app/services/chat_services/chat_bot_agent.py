@@ -8,7 +8,7 @@ from langchain.agents.middleware import ModelRequest, before_model, dynamic_prom
 from langchain.agents.structured_output import ToolStrategy
 from langchain.messages import RemoveMessage
 from fastapi.concurrency import run_in_threadpool
-from core.config import setting_chatbot, settings_server
+from core.config import settings_chatbot, settings_server
 from core.logging_config import get_named_rotating_file_logger
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.checkpoint.memory import InMemorySaver
@@ -209,7 +209,12 @@ def _inject_long_term_memory_prompt(request: ModelRequest) -> str:
 class ChatBotAgent:
     def __init__(self):
         self._prompt = _PROMPT
-        self._llm = setting_chatbot.LLM
+        self._llm = settings_chatbot.get_llm()
+        if self._llm is None:
+            raise RuntimeError(
+                "ChatBotAgent không thể khởi tạo: thiếu langchain_google_genai. "
+                "Cài đặt: pip install langchain-google-genai"
+            )
         self._redis_cm: AbstractContextManager | None = None
         self._store_cm: AbstractContextManager | None = None
         self._checkpointer = self._build_checkpointer()

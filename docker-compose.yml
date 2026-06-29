@@ -9,10 +9,16 @@ services:
       POSTGRES_USER: ${DATABASE_USERNAME}
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
       POSTGRES_DB: ${DATABASE_NAME}
+      # Cấu hình PostgreSQL cho ITS workload
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+      POSTGRES_SHARED_BUFFERS: "256MB"
+      POSTGRES_MAX_CONNECTIONS: "200"
     ports:
       - "${DATABASE_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Backup tự động hàng ngày
+      - ./scripts/postgres-backup.sh:/docker-entrypoint-initdb.d/backup.sh:ro
     healthcheck:
       test:
         ["CMD-SHELL", "pg_isready -U ${DATABASE_USERNAME} -d ${DATABASE_NAME}"]
@@ -20,6 +26,12 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    # Logging ra stdout để Docker logs thu thập
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - sts-net
 
@@ -27,13 +39,29 @@ services:
     image: redis:7-alpine
     container_name: sts-redis
     restart: unless-stopped
+    # Enable persistence (RDB snapshots)
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
     ports:
       - "6379:6379"
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - sts-net
 
@@ -86,6 +114,9 @@ services:
       API_BASE_URL: "http://localhost:8000"
       BATCH_INFERENCE_ENABLED: "true"
       GPU_ENABLED: "${GPU_ENABLED:-true}"
+      # Cấu hình logging
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      LOG_TO_CONSOLE: "${LOG_TO_CONSOLE:-false}"
     ports:
       - "8000:8000"
     volumes:
@@ -94,8 +125,23 @@ services:
       - ./backend/bot_discord.py:/backend/bot_discord.py
       - ./backend/app/services/chat_services/chat_bot_agent.py:/backend/app/services/chat_services/chat_bot_agent.py
       - ./backend/app/core/config.py:/backend/app/core/config.py
+      - ./backend/app/core/logging_config.py:/backend/app/core/logging_config.py
+      - ./backend/app/core/violation_engine.py:/backend/app/core/violation_engine.py
+      - ./backend/app/core/anpr.py:/backend/app/core/anpr.py
+      - ./backend/app/core/rate_limiter.py:/backend/app/core/rate_limiter.py
+      - ./backend/app/core/request_id_middleware.py:/backend/app/core/request_id_middleware.py
       - ./backend/app/services/road_services/analyze_on_road_base.py:/backend/app/services/road_services/analyze_on_road_base.py
       - ./backend/app/services/road_services/analyze_on_road.py:/backend/app/services/road_services/analyze_on_road.py
+      - ./backend/app/services/road_services/violation_worker.py:/backend/app/services/road_services/violation_worker.py
+      - ./backend/app/services/road_services/traffic_history_worker.py:/backend/app/services/road_services/traffic_history_worker.py
+      - ./backend/app/utils/polygon_utils.py:/backend/app/utils/polygon_utils.py
+      - ./backend/app/utils/system_metrics.py:/backend/app/utils/system_metrics.py
+      - ./backend/app/models/violation.py:/backend/app/models/violation.py
+      - ./backend/app/main.py:/backend/app/main.py
+      - ./backend/app/api/v1/api_monitoring.py:/backend/app/api/v1/api_monitoring.py
+      - ./backend/app/api/v1/__init__.py:/backend/app/api/v1/__init__.py
+      - ./backend/app/api/v1/state.py:/backend/app/api/v1/state.py
+      - ./backend/app/db/base.py:/backend/app/db/base.py
       # Xuất logs từ backend ra ngoài host
       - ./logs/backend:/backend/app/logs
     depends_on:
@@ -106,24 +152,33 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
+      # Sử dụng endpoint /health thay vì /docs (ít overhead hơn)
       test:
         [
           "CMD-SHELL",
-          "wget -q -O - http://localhost:8000/docs > /dev/null || exit 1",
+          "wget -q -O - http://localhost:8000/api/v1/health > /dev/null || exit 1",
         ]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    networks:
-      - sts-net
+      interval: 30s          # Tăng từ 15s → 30s để giảm tải
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # Giới hạn tài nguyên để tránh OOM toàn hệ thống
     deploy:
       resources:
+        limits:
+          cpus: '4'
+          memory: 4G
         reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+          cpus: '1'
+          memory: 1G
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - sts-net
 
   inference-server:
     build:
@@ -196,3 +251,4 @@ networks:
 volumes:
   pgdata:
   minio-data:
+  redis-data:

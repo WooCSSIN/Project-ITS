@@ -17,6 +17,7 @@ async def create_tables():
     # from models.token_llm import TokenLLM
     from models.chat_message import ChatMessage
     from models.traffic_history import TrafficHistory
+    from models.violation import Violation
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

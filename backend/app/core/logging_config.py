@@ -1,4 +1,7 @@
 import logging
+import sys
+import uuid
+from contextvars import ContextVar
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
@@ -8,11 +11,48 @@ from core.config import settings_server
 
 _IS_CONFIGURED = False
 
+# ContextVar để track request_id trong async context
+_request_id_var: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
+
+
+def set_request_id(request_id: Optional[str] = None) -> str:
+    """Set request_id cho context hiện tại.
+
+    Args:
+        request_id: ID có sẵn, hoặc None để auto-generate UUID.
+
+    Returns:
+        Request ID đã được set.
+    """
+    if request_id is None:
+        request_id = uuid.uuid4().hex[:16]
+    _request_id_var.set(request_id)
+    return request_id
+
+
+def get_request_id() -> Optional[str]:
+    """Lấy request_id của context hiện tại."""
+    return _request_id_var.get()
+
+
+def clear_request_id() -> None:
+    """Xóa request_id (dùng khi request kết thúc)."""
+    _request_id_var.set(None)
+
+
+class RequestIdFilter(logging.Filter):
+    """Filter để thêm request_id vào log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = get_request_id() or "-"
+        return True
+
 
 def setup_logging(level: Optional[str] = None) -> None:
 	"""Configure application-wide logging once.
 
-	The format includes process name to help debug multiprocessing traffic workers.
+	The format includes process name and request_id to help debug
+	multiprocessing traffic workers và trace request qua nhiều module.
 	"""
 	global _IS_CONFIGURED
 
@@ -28,12 +68,17 @@ def setup_logging(level: Optional[str] = None) -> None:
 	backup_count = settings_server.LOG_FILE_BACKUP_COUNT
 	log_to_console = settings_server.LOG_TO_CONSOLE
 
+	# Format có request_id ở giữa để dễ đọc
 	formatter = logging.Formatter(
-		"%(asctime)s | %(levelname)s | %(processName)s | %(name)s | %(message)s"
+		"%(asctime)s | %(levelname)s | %(processName)s | %(request_id)s | %(name)s | %(message)s"
 	)
 
-	stream_handler = logging.StreamHandler()
+	# Request ID filter
+	request_id_filter = RequestIdFilter()
+
+	stream_handler = logging.StreamHandler(sys.stdout)
 	stream_handler.setFormatter(formatter)
+	stream_handler.addFilter(request_id_filter)
 
 	file_handler = RotatingFileHandler(
 		filename=log_file,
@@ -42,6 +87,7 @@ def setup_logging(level: Optional[str] = None) -> None:
 		encoding="utf-8",
 	)
 	file_handler.setFormatter(formatter)
+	file_handler.addFilter(request_id_filter)
 
 	root_logger = logging.getLogger()
 	root_logger.setLevel(log_level)
@@ -58,6 +104,7 @@ def setup_logging(level: Optional[str] = None) -> None:
 		sql_logger.setLevel(sql_log_level)
 		sql_logger.handlers.clear()
 		sql_logger.addHandler(file_handler)
+		sql_logger.addFilter(request_id_filter)
 		sql_logger.propagate = False
 
 	# Dọn các logger con sqlalchemy đã được tạo trước đó (ví dụ do engine init sớm) để tránh in ra console.
@@ -68,6 +115,7 @@ def setup_logging(level: Optional[str] = None) -> None:
 		logger_obj.setLevel(sql_log_level)
 		logger_obj.handlers.clear()
 		logger_obj.addHandler(file_handler)
+		logger_obj.addFilter(request_id_filter)
 		logger_obj.propagate = False
 
 	_IS_CONFIGURED = True
@@ -107,8 +155,9 @@ def get_named_rotating_file_logger(
 		encoding="utf-8",
 	)
 	handler.setFormatter(
-		logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+		logging.Formatter("%(asctime)s | %(levelname)s | %(request_id)s | %(name)s | %(message)s")
 	)
+	handler.addFilter(RequestIdFilter())
 
 	logger.setLevel(resolved_level)
 	logger.addHandler(handler)

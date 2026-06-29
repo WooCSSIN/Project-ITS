@@ -45,7 +45,6 @@ async def _safe_ws_close(websocket: WebSocket, code: int = 1011) -> None:
         _log_exception_everywhere("Failed to close websocket", exc)
 
 
-
 @router.on_event("startup")
 def _startup_chat_agent():
     if not hasattr(state, 'agent') or state.agent is None:
@@ -56,6 +55,7 @@ def _startup_chat_agent():
         except Exception:
             logger.exception("Không thể khởi tạo Chat Agent")
             state.agent = None
+
 
 @router.post(
     path='/chat',

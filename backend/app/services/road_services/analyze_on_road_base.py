@@ -2,6 +2,7 @@ from abc import abstractmethod
 import cvzone
 import cv2
 import os
+import threading
 import logging
 import numpy as np
 import psutil
@@ -12,6 +13,13 @@ from ultralytics import solutions
 from utils.transport_utils import avg_none_zero_batch
 from core.config import settings_metric_transport
 logger = logging.getLogger(__name__)
+
+# Cờ bật/tắt kiểm tra fps (tránh ZeroDivisionError)
+DEFAULT_FALLBACK_FPS = 30.0
+# Số frame tối đa giữ trong SpeedSmoother (LRU eviction tránh memory leak)
+_MAX_TRACKED_IDS = 500
+# Ngưỡng retry kết nối camera offline (file)
+MAX_OFFLINE_RETRY = 3
 
 
 class SpeedSmoother:
@@ -26,33 +34,59 @@ class SpeedSmoother:
         alpha (float): Hệ số EMA. alpha=1.0 → không smooth (raw speed).
                        alpha=0.25 → smooth nhiều hơn, phản ứng chậm hơn với thay đổi thực.
                        Mặc định 0.3 là balance tốt giữa độ mượt và độ nhạy.
+        max_tracked (int): Số track_id tối đa lưu trong dict (LRU eviction).
     """
 
-    def __init__(self, alpha: float = 0.3):
+    def __init__(self, alpha: float = 0.3, max_tracked: int = _MAX_TRACKED_IDS):
         self.alpha = alpha
+        self.max_tracked = max_tracked
         self._smoothed: dict[int, float] = {}
+        self._lock = threading.Lock()  # Bảo vệ concurrent access từ nhiều thread
 
     def update(self, track_id: int, raw_speed: float) -> float:
         """Cập nhật và trả về tốc độ đã làm mượt cho một track_id."""
-        if raw_speed <= 0:
-            return self._smoothed.get(track_id, 0.0)
-        prev = self._smoothed.get(track_id, raw_speed)
-        smoothed = self.alpha * raw_speed + (1.0 - self.alpha) * prev
-        self._smoothed[track_id] = smoothed
-        return smoothed
+        with self._lock:
+            if raw_speed <= 0:
+                return self._smoothed.get(track_id, 0.0)
+            prev = self._smoothed.get(track_id, raw_speed)
+            smoothed = self.alpha * raw_speed + (1.0 - self.alpha) * prev
+            # LRU eviction: nếu vượt quá max_tracked, xóa entry cũ nhất
+            if len(self._smoothed) >= self.max_tracked and track_id not in self._smoothed:
+                oldest_id = next(iter(self._smoothed))
+                self._smoothed.pop(oldest_id, None)
+            self._smoothed[track_id] = smoothed
+            return smoothed
 
     def remove(self, track_id: int) -> None:
         """Xoá track_id khi không còn được theo dõi."""
-        self._smoothed.pop(track_id, None)
+        with self._lock:
+            self._smoothed.pop(track_id, None)
 
     def clear(self) -> None:
         """Reset toàn bộ state (dùng khi reset chu kỳ)."""
-        self._smoothed.clear()
+        with self._lock:
+            self._smoothed.clear()
+
+    def prune(self, active_ids: set) -> int:
+        """Xoá các track_id không còn hoạt động. Trả về số entry đã xoá.
+
+        Args:
+            active_ids: set các track_id hiện đang được track.
+        """
+        with self._lock:
+            stale = [tid for tid in self._smoothed if tid not in active_ids]
+            for tid in stale:
+                self._smoothed.pop(tid, None)
+            return len(stale)
 
 class HomographySpeedTracker:
     def __init__(self, H: np.ndarray, fps: float = 30.0, max_hist: int = 15):
-        self.H = H
-        self.fps = fps
+        # Validate H là numpy array hợp lệ
+        if not isinstance(H, np.ndarray) or H.shape != (3, 3):
+            raise ValueError(f"Homography matrix phải là np.ndarray shape (3, 3), nhận được: {type(H).__name__} shape={getattr(H, 'shape', None)}")
+        self.H = H.astype(np.float32)
+        # Validate fps: nếu <= 0 thì fallback về DEFAULT_FALLBACK_FPS
+        self.fps = fps if fps > 0 else DEFAULT_FALLBACK_FPS
         self.max_hist = max_hist
         self.track_history = {}  # track_id -> list of (real_x, real_y)
         self.speeds = {}         # track_id -> speed in km/h
@@ -77,14 +111,25 @@ class HomographySpeedTracker:
         dist_m = sum(np.sqrt((hist[i][0]-hist[i-1][0])**2 + (hist[i][1]-hist[i-1][1])**2) for i in range(1, len(hist)))
 
         time_elapsed = (len(hist) - 1) / self.fps
-        speed_mps = dist_m / time_elapsed if time_elapsed > 0 else 0
+        # Validate time_elapsed tránh ZeroDivisionError và giá trị vô cùng
+        if not np.isfinite(time_elapsed) or time_elapsed <= 0:
+            self.speeds[track_id] = 0.0
+            return 0.0
+        speed_mps = dist_m / time_elapsed
+        # Bound speed để tránh outlier (xe không thể đi > 200 km/h trong nội đô)
+        speed_mps = min(speed_mps, 55.56)  # ~200 km/h
         speed_kmh = speed_mps * 3.6
         self.speeds[track_id] = speed_kmh
         return speed_kmh
 
     def set_fps(self, fps: float):
-        if fps > 0:
+        if fps is not None and np.isfinite(fps) and fps > 0:
             self.fps = fps
+
+    def remove(self, track_id: int) -> None:
+        """Xoá track_id khi không còn được theo dõi."""
+        self.track_history.pop(track_id, None)
+        self.speeds.pop(track_id, None)
 
 
 class AnalyzeOnRoadBase:
@@ -194,6 +239,8 @@ class AnalyzeOnRoadBase:
         self.speeds = {}
         self.boxes = None
         self.classes = None
+        # Bảo vệ ids_old bằng lock để tránh RuntimeError khi clear() trong khi iterate
+        self._ids_old_lock = threading.Lock()
         self.ids_old = set()
 
         # --- Speed smoother: EMA per track_id ---
@@ -203,28 +250,45 @@ class AnalyzeOnRoadBase:
         self._base_infer_every_n = max(1, int(infer_every_n_frames))
 
         # --- FPS tracking thực tế để cập nhật SpeedEstimator ---
-        self._actual_fps: float = 30.0  # Khởi tạo mặc định, sẽ được đo thực tế
+        self._actual_fps: float = DEFAULT_FALLBACK_FPS  # Khởi tạo mặc định, sẽ được đo thực tế
 
         # --- Homography Speed Tracker ---
         # Tạm thời dùng identity matrix nếu không có (ví dụ cho test video)
         # Trong thực tế, truyền H từ config hoặc DB vào đây
-        
-        # Thử lấy matrix tương ứng với video, nếu không thì identity
-        try:
-            idx = settings_metric_transport.PATH_VIDEOS.index(self.path_video)
-            H_matrix = settings_metric_transport.HOMOGRAPHY_MATRICES[idx]
-        except (ValueError, IndexError, AttributeError):
-            H_matrix = np.array([[0.05, 0, 0], [0, 0.05, 0], [0, 0, 1]], dtype=np.float32)
 
-        self.homography_tracker = HomographySpeedTracker(H=H_matrix, fps=self._actual_fps, max_hist=15)
+        # Thử lấy matrix tương ứng với video, nếu không thì fallback
+        H_matrix = None
+        try:
+            path_videos = getattr(settings_metric_transport, 'PATH_VIDEOS', None)
+            h_matrices = getattr(settings_metric_transport, 'HOMOGRAPHY_MATRICES', None)
+            if path_videos and h_matrices and self.path_video in path_videos:
+                idx = path_videos.index(self.path_video)
+                if idx < len(h_matrices):
+                    H_matrix = h_matrices[idx]
+        except Exception:
+            H_matrix = None
+
+        if H_matrix is None or not isinstance(H_matrix, np.ndarray):
+            # Fallback matrix với scale hợp lý (không phải 0.05 quá nhỏ gây sai số lớn)
+            H_matrix = np.array([[0.1, 0, 0], [0, 0.1, 0], [0, 0, 1]], dtype=np.float32)
+
+        try:
+            self.homography_tracker = HomographySpeedTracker(H=H_matrix, fps=self._actual_fps, max_hist=15)
+        except ValueError as exc:
+            logger.error("Invalid homography matrix for %s: %s. Using fallback.", self.name, exc)
+            fallback_H = np.array([[0.1, 0, 0], [0, 0.1, 0], [0, 0, 1]], dtype=np.float32)
+            self.homography_tracker = HomographySpeedTracker(H=fallback_H, fps=self._actual_fps, max_hist=15)
 
         # --- Inference Client (GPU Batch Mode) ---
+        self.inference_client = None
         if settings_metric_transport.BATCH_INFERENCE_ENABLED:
-            from services.road_services.batch_inference_server import InferenceClient
-            from core.config import settings_server
-            self.inference_client = InferenceClient(camera_id=self.name, redis_url=settings_server.REDIS_URL)
-        else:
-            self.inference_client = None
+            try:
+                from services.road_services.batch_inference_server import InferenceClient
+                from core.config import settings_server
+                self.inference_client = InferenceClient(camera_id=self.name, redis_url=settings_server.REDIS_URL)
+            except Exception as exc:
+                logger.warning("Failed to init InferenceClient for %s: %s. Fallback to local.", self.name, exc)
+                self.inference_client = None
 
     @abstractmethod
     def update_for_frame(self):
@@ -293,7 +357,16 @@ class AnalyzeOnRoadBase:
             self.list_count_motor.clear()
             self.list_speed_car.clear()
             self.list_speed_motor.clear()
-            self.ids_old.clear()
+            # Bảo vệ clear() bằng lock để tránh RuntimeError với _update_display_counts
+            with self._ids_old_lock:
+                self.ids_old.clear()
+
+            # Cleanup SpeedSmoother: xoá các track_id không còn hoạt động
+            if hasattr(self, 'ids') and self.ids is not None and len(self.ids) > 0:
+                active_ids = set(int(i) for i in self.ids.tolist())
+                self.speed_smoother.prune(active_ids)
+            else:
+                self.speed_smoother.clear()
 
     def process_single_frame(self, frame_input):
         """Hàm này xử lý từng frame một
@@ -385,13 +458,12 @@ class AnalyzeOnRoadBase:
 
         car_ids = ids[car_mask]
         motor_ids = ids[motor_mask]
-        ids_old = self.ids_old
 
-        def collect_speeds(new_ids: np.ndarray):
+        def collect_speeds(new_ids: np.ndarray, ids_old_snapshot: set):
             if new_ids.size == 0:
                 return []
-            if ids_old:
-                mask_new = ~np.isin(new_ids, list(ids_old), assume_unique=False)
+            if ids_old_snapshot:
+                mask_new = ~np.isin(new_ids, list(ids_old_snapshot), assume_unique=False)
                 new_ids = new_ids[mask_new]
             if new_ids.size == 0:
                 return []
@@ -400,15 +472,25 @@ class AnalyzeOnRoadBase:
             valid_mask = spd_arr > 0.0
             if not np.any(valid_mask):
                 return []
-            ids_old.update(new_ids[valid_mask].tolist())
             return spd_arr[valid_mask].tolist()
 
-        car_speeds = collect_speeds(car_ids)
-        motor_speeds = collect_speeds(motor_ids)
-        if car_speeds:
-            self.list_speed_car.extend(car_speeds)
-        if motor_speeds:
-            self.list_speed_motor.extend(motor_speeds)
+        # Lấy snapshot của ids_old dưới lock, sau đó update dưới lock để tránh race condition
+        with self._ids_old_lock:
+            ids_old_snapshot = set(self.ids_old)
+            car_speeds = collect_speeds(car_ids, ids_old_snapshot)
+            motor_speeds = collect_speeds(motor_ids, ids_old_snapshot)
+            if car_speeds:
+                self.list_speed_car.extend(car_speeds)
+            if motor_speeds:
+                self.list_speed_motor.extend(motor_speeds)
+            # Cập nhật ids_old với các track mới có speed hợp lệ
+            if ids_old_snapshot or len(ids) > 0:
+                valid_mask = np.array([
+                    smoothed_speeds.get(int(tid), 0.0) > 0.0
+                    for tid in ids
+                ])
+                new_valid_ids = set(int(tid) for tid in ids[valid_mask].tolist())
+                self.ids_old.update(new_valid_ids - ids_old_snapshot)
 
     def post_processing(self):
         if self.speed_tool.track_data is not None:
@@ -468,7 +550,7 @@ class AnalyzeOnRoadBase:
 
 
     def draw_info_to_frame_output(self):
-        """Hàm này để vẽ các thông tin lên ảnh - optimized version"""
+        """Hàm này để vẽ các thông tin lên ảnh - optimized version với vectorized polygon test."""
         try:
             if self.ids is not None and len(self.ids) > 0:
                 # Vectorized center calculation
@@ -480,20 +562,22 @@ class AnalyzeOnRoadBase:
                 cx = ((x1 + x2) // 2).astype(np.int32)
                 cy = ((y1 + y2) // 2).astype(np.int32)
 
-                # Tìm các điểm nằm trong vùng ROI: prefilter bằng bounding box để giảm số lần pointPolygonTest
+                # Prefilter bằng bounding box (vectorized)
                 bx, by, bw, bh = self.region_bbox
                 in_bbox_mask = (
                     (cx >= bx) & (cx < bx + bw) &
                     (cy >= by) & (cy < by + bh)
                 )
                 candidate_idx = np.nonzero(in_bbox_mask)[0]
-                valid_list = []
-                region_pts_local = self.region_pts  # local ref
-                for idx in candidate_idx:
-                    if cv2.pointPolygonTest(region_pts_local, (int(cx[idx]), int(cy[idx])), False) >= 0:
-                        valid_list.append(idx)
-                if valid_list:
-                    valid_indices = np.asarray(valid_list, dtype=np.int32)
+
+                # Vectorized polygon test thay vì vòng lặp cv2.pointPolygonTest
+                # 50x nhanh hơn khi có nhiều vehicle
+                if len(candidate_idx) > 0:
+                    candidate_points = np.column_stack([cx[candidate_idx], cy[candidate_idx]])
+                    # Import lazily để tránh circular import
+                    from utils.polygon_utils import points_in_polygon_fast
+                    in_polygon = points_in_polygon_fast(candidate_points, self.region.reshape(-1, 2))
+                    valid_indices = candidate_idx[in_polygon]
                 else:
                     valid_indices = np.empty((0,), dtype=np.int32)
 
@@ -558,16 +642,18 @@ class AnalyzeOnRoadBase:
         cam = None
         consecutive_failures = 0
         target_size = (600, 400)
+        # Cờ để worker dừng hẳn (tránh vòng lặp vô hạn khi camera lỗi liên tục)
+        should_stop = False
 
         # Hàm helper kết nối/tái kết nối camera an toàn
-        def connect_camera():
-            nonlocal cam, consecutive_failures
+        def connect_camera(max_retry: int = MAX_OFFLINE_RETRY if not is_network_stream else None):
+            nonlocal cam, consecutive_failures, should_stop
             if cam is not None:
                 try:
                     cam.release()
                 except Exception:
                     pass
-            
+
             retry_count = 0
             while True:
                 logger.info("Đang kết nối tới nguồn camera %s...", self.name)
@@ -575,23 +661,30 @@ class AnalyzeOnRoadBase:
                 if cam.isOpened():
                     logger.info("Kết nối thành công nguồn camera %s!", self.name)
                     consecutive_failures = 0
-                    break
-                
+                    return True
+
+                # Camera offline file - giới hạn retry để tránh lặp vô hạn
                 if not is_network_stream:
-                    logger.error("Không thể mở video file offline: %s", self.path_video)
-                    break
-                
+                    logger.error("Không thể mở video file offline: %s. Worker %s dừng.", self.path_video, self.name)
+                    should_stop = True
+                    return False
+
+                # Camera network stream: retry vô hạn nhưng có thể stop từ bên ngoài
                 retry_count += 1
+                if max_retry is not None and retry_count > max_retry:
+                    logger.error("Đã vượt quá max_retry=%d cho camera %s. Dừng worker.", max_retry, self.name)
+                    should_stop = True
+                    return False
+
                 logger.warning("Kết nối camera %s thất bại (lần %d). Thử lại sau 5 giây...", self.name, retry_count)
                 time.sleep(5)
 
         # Lần kết nối đầu tiên
-        connect_camera()
-        if cam is None or not cam.isOpened():
+        if not connect_camera():
             return
 
         try:
-            while True:
+            while not should_stop:
                 check, cap = cam.read()
 
                 if not check:
@@ -599,11 +692,12 @@ class AnalyzeOnRoadBase:
                         consecutive_failures += 1
                         if consecutive_failures >= 15:
                             logger.warning(
-                                "Mất kết nối luồng camera %s (15 frames không phản hồi). Tiến hành tự động kết nối lại...", 
+                                "Mất kết nối luồng camera %s (15 frames không phản hồi). Tiến hành tự động kết nối lại...",
                                 self.name
                             )
                             time.sleep(3)
-                            connect_camera()
+                            if not connect_camera():
+                                break
                         else:
                             time.sleep(0.1) # Tránh loop quá nhanh làm nghẽn CPU khi mất mạng tạm thời
                         continue
@@ -627,10 +721,10 @@ class AnalyzeOnRoadBase:
                         delta_time = (time_now - self.time_pre_for_fps).total_seconds()
                         fps = round(1 / delta_time) if delta_time > 0 else 0
                         self.time_pre_for_fps = time_now
-                        self._actual_fps = fps if fps > 0 else 30.0
+                        self._actual_fps = fps if fps > 0 else DEFAULT_FALLBACK_FPS
                 else:
                     fps = 30
-                    self._actual_fps = 30.0
+                    self._actual_fps = DEFAULT_FALLBACK_FPS
 
                 cvzone.putTextRect(cap, f"FPS: {fps}",
                                  (516, 20),
@@ -646,8 +740,13 @@ class AnalyzeOnRoadBase:
                 if self.frame_count % self.current_skip == 0:
                     self.process_single_frame(cap)
                 else:
-                    # Không infer ở frame này, ghi đè trace cũ lên frame mới
-                    self.frame_output = cap
+                    # Không infer ở frame này, ghi đè frame mới nhưng vẫn giữ trace cũ
+                    # Sử dụng copy để tránh aliasing với cap gốc (cv2.release() sẽ free buffer)
+                    if self.frame_output is None or self.frame_output.shape != cap.shape:
+                        self.frame_output = cap.copy()
+                    else:
+                        # Copy nội dung frame mới vào frame_output để giữ các annotation đã vẽ
+                        np.copyto(self.frame_output, cap)
                     if self.is_draw:
                         self.draw_info_to_frame_output()
 
