@@ -97,6 +97,40 @@ class AnalyzeOnRoad(AnalyzeOnRoadBase):
         except Exception:
             logger.exception("Loi khi update thong tin phuong tien cua %s", self.name)
 
+    @override
+    def _push_violations_to_queue(self, new_violations: list):
+        """Push violations vào Redis queue để ViolationWorker xử lý."""
+        if not new_violations:
+            return
+        
+        try:
+            for violation in new_violations:
+                payload = {
+                    "camera_id": violation.get("camera_id"),
+                    "violation_type": violation.get("violation_type"),
+                    "vehicle_track_id": violation.get("vehicle_track_id"),
+                    "license_plate": violation.get("license_plate"),
+                    "confidence": violation.get("confidence"),
+                    "timestamp": violation.get("timestamp"),
+                    "speed_kmh": violation.get("speed_kmh"),
+                    "speed_limit_kmh": violation.get("speed_limit_kmh"),
+                    "box": violation.get("box"),
+                    "evidence_image_url": violation.get("evidence_image_url"),
+                }
+                # Push vào Redis violations queue
+                self.redis.lpush("violations:queue", json.dumps(payload, ensure_ascii=False))
+                logger.info(
+                    "Pushed violation to queue: type=%s camera_id=%s track_id=%s",
+                    payload.get("violation_type"),
+                    payload.get("camera_id"),
+                    payload.get("vehicle_track_id"),
+                )
+            
+            # Giới hạn queue size (giữ 1000 violations gần nhất)
+            self.redis.ltrim("violations:queue", 0, 999)
+        except Exception:
+            logger.exception("Error pushing violations to queue for %s", self.name)
+
 
 
 #************************************************************************ Script for testing *******************************************************

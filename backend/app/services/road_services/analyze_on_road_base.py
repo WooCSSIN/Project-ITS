@@ -290,6 +290,32 @@ class AnalyzeOnRoadBase:
                 logger.warning("Failed to init InferenceClient for %s: %s. Fallback to local.", self.name, exc)
                 self.inference_client = None
 
+        # --- Violation Engine ---
+        # Lấy camera_id từ PATH_VIDEOS index (nếu có)
+        camera_id = 0
+        road_name_for_violation = self.name
+        try:
+            path_videos = getattr(settings_metric_transport, 'PATH_VIDEOS', None)
+            if path_videos and self.path_video in path_videos:
+                camera_id = path_videos.index(self.path_video)
+        except Exception:
+            pass
+
+        self.violation_engine = None
+        try:
+            from core.violation_engine import ViolationEngine
+            from core.config import SPEED_LIMITS
+            speed_limit = SPEED_LIMITS.get(road_name_for_violation, None)
+            self.violation_engine = ViolationEngine(
+                camera_id=camera_id,
+                speed_limit_kmh=speed_limit,
+                road_name=road_name_for_violation,
+            )
+            logger.info("ViolationEngine initialized for %s (camera_id=%s, speed_limit=%s)", 
+                       self.name, camera_id, speed_limit)
+        except Exception as exc:
+            logger.warning("Failed to init ViolationEngine for %s: %s", self.name, exc)
+
     @abstractmethod
     def update_for_frame(self):
         pass
@@ -541,6 +567,19 @@ class AnalyzeOnRoadBase:
             self.boxes = boxes
 
             self._update_display_counts(classes, ids, smoothed_speeds)
+
+            # --- Violation Detection ---
+            if self.violation_engine is not None:
+                violations = self.violation_engine.process_frame_tracking(
+                    classes=classes,
+                    ids=ids,
+                    boxes=boxes,
+                    speeds=smoothed_speeds,
+                    timestamp=datetime.now().timestamp(),
+                    frame=self.frame_output,
+                )
+                if violations:
+                    self._push_violations_to_queue(violations)
         else:
             # Không có track_data ở frame này -> xóa track cũ để tránh hiển thị sai
             self.speeds = {}
@@ -736,7 +775,7 @@ class AnalyzeOnRoadBase:
 
                 # Chỉ infer mỗi N frame để giảm tải (N được điều chỉnh tự động theo CPU load)
                 self.frame_count += 1
-                self.current_skip = self._get_adaptive_skip_factor()
+                self.current_skip = self._get_adaptive_skip_factor()  # ← FIX: gán trước khi dùng
                 if self.frame_count % self.current_skip == 0:
                     self.process_single_frame(cap)
                 else:

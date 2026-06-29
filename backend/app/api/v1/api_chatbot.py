@@ -1,8 +1,9 @@
+import hashlib
 import logging
 import sys
 import traceback
 from api.v1 import state
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, status
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect, HTTPException, status
 from schemas.chat import ChatRequest
 from schemas.chat import ChatResponse
 from services.chat_services.chat_bot_agent import ChatBotAgent
@@ -18,6 +19,21 @@ from fastapi.websockets import WebSocketState
 router = APIRouter(prefix= "/chatbot")
 logger = logging.getLogger(__name__)
 BUSY_MESSAGE = "Hệ thống đang bận, vui lòng thử lại sau."
+
+# Offset để tách namespace anonymous khỏi real user IDs (tránh trùng id=1,2,3...)
+_ANON_ID_OFFSET = 9_000_000
+
+
+def _anon_thread_id(request: Request) -> int:
+    """Tạo thread ID riêng biệt cho mỗi anonymous user dựa trên IP.
+    
+    Dùng hash IP để mỗi người dùng có thread chat riêng, tránh lẫn lộn
+    lịch sử giữa các users. Không cần auth nhưng vẫn đảm bảo isolation.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    # Hash IP thành số nguyên dương trong range an toàn
+    ip_hash = int(hashlib.md5(client_ip.encode()).hexdigest()[:8], 16)
+    return _ANON_ID_OFFSET + (ip_hash % 1_000_000)
 
 def _log_exception_everywhere(context: str, exc: Exception) -> None:
     """Log exception to configured logger (file) and stderr (console)."""
@@ -45,8 +61,8 @@ async def _safe_ws_close(websocket: WebSocket, code: int = 1011) -> None:
         _log_exception_everywhere("Failed to close websocket", exc)
 
 
-@router.on_event("startup")
-def _startup_chat_agent():
+def _ensure_chat_agent_initialized():
+    """Khởi tạo Chat Agent nếu chưa có. Được gọi từ lifespan hoặc khi cần."""
     if not hasattr(state, 'agent') or state.agent is None:
         logger.info("Đang khởi tạo Chat Agent...")
         try:
@@ -109,9 +125,9 @@ async def chat(
     path='/chat_no_auth',
     response_model=ChatResponse,
     summary="Chat với AI (không xác thực)",
-    description="API gửi tin nhắn tới AI Chatbot KHÔNG yêu cầu authentication. Dùng cho demo hoặc public access. Mặc định sử dụng user_id = 1."
+    description="API gửi tin nhắn tới AI Chatbot KHÔNG yêu cầu authentication. Dùng cho demo hoặc public access. Thread ID được tạo riêng theo IP để tránh lẫn lộn lịch sử."
 )
-async def chat_no_auth(request: ChatRequest):
+async def chat_no_auth(request: Request, body: ChatRequest):
     if state.agent is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -119,7 +135,9 @@ async def chat_no_auth(request: ChatRequest):
         )
 
     try:
-        data = await state.agent.get_response(request.message, id=9999)
+        # Tạo thread ID riêng theo IP thay vì hardcode 9999
+        thread_id = _anon_thread_id(request)
+        data = await state.agent.get_response(body.message, id=thread_id)
         return ChatResponse(
             message=data["message"],
             image=data["image"]

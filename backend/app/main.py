@@ -107,10 +107,12 @@ async def lifespan(app: FastAPI):
     # Khởi tạo chat agent (không block event loop vì create_agent là sync nhưng nhẹ)
     try:
         from services.chat_services.chat_bot_agent import ChatBotAgent
+        from api.v1.api_chatbot import _ensure_chat_agent_initialized
         if getattr(v1.state, 'agent', None) is None:
             logger.info("Đang khởi tạo Chat Agent...")
             v1.state.agent = ChatBotAgent()
             logger.info("Khởi tạo Chat Agent thành công")
+        _ensure_chat_agent_initialized()
     except Exception:
         logger.exception("Không thể khởi tạo Chat Agent")
         v1.state.agent = None

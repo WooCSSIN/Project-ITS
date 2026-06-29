@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-import requests
+import aiohttp
 import logging
 import os
 from io import BytesIO
@@ -47,14 +47,20 @@ async def handle_chatbot_interaction(message: discord.Message, user_text: str):
         try:
             logger.info("Nhận câu hỏi từ %s: %s", message.author, user_text)
 
-            # Gọi API backend
-            res = requests.post(
-                CHATBOT_API_URL,
-                json={"message": user_text},
-                timeout=60
-            )
-            res.raise_for_status()
-            data = res.json()
+            # Gọi API backend sử dụng aiohttp (async)
+            async with aiohttp.ClientSession() as session:
+                try:
+                    async with session.post(
+                        CHATBOT_API_URL,
+                        json={"message": user_text},
+                        timeout=aiohttp.ClientTimeout(total=60)
+                    ) as res:
+                        res.raise_for_status()
+                        data = await res.json()
+                except aiohttp.ClientError as exc:
+                    logger.exception("Lỗi kết nối API chatbot")
+                    await message.reply(f"❌ Lỗi kết nối hệ thống: `{exc}`")
+                    return
 
             logger.info("API trả về: %s", str(data)[:200])
 
@@ -70,36 +76,40 @@ async def handle_chatbot_interaction(message: discord.Message, user_text: str):
                     else:
                         await message.channel.send(chunk)
 
-            # ── Gửi ảnh camera (nếu có) ───────────────────────────────────────
+            # ── Gửi ảnh camera (nếu có) - async với aiohttp ──────────────────
             images = data.get("image", [])
             if isinstance(images, list) and images:
-                for img_url in images:
-                    try:
-                        if isinstance(img_url, str) and img_url.startswith(("http://", "https://")):
-                            img_response = requests.get(img_url, timeout=15)
-                            if img_response.status_code == 200:
-                                img_bytes = BytesIO(img_response.content)
-                                img_bytes.seek(0)
-                                await message.channel.send(
-                                    file=discord.File(img_bytes, filename="camera.jpg")
-                                )
+                async with aiohttp.ClientSession() as img_session:
+                    for img_url in images:
+                        try:
+                            if isinstance(img_url, str) and img_url.startswith(("http://", "https://")):
+                                async with img_session.get(
+                                    img_url,
+                                    timeout=aiohttp.ClientTimeout(total=15)
+                                ) as img_response:
+                                    if img_response.status == 200:
+                                        img_bytes = BytesIO(await img_response.read())
+                                        img_bytes.seek(0)
+                                        await message.channel.send(
+                                            file=discord.File(img_bytes, filename="camera.jpg")
+                                        )
+                                    else:
+                                        await message.channel.send(f"❌ Không thể tải ảnh (HTTP {img_response.status})")
                             else:
-                                await message.channel.send(f"❌ Không thể tải ảnh: `{img_url}`")
-                        else:
-                            await message.channel.send("❌ Định dạng ảnh không hợp lệ.")
-                    except Exception:
-                        logger.exception("Lỗi khi gửi ảnh Discord")
-                        await message.channel.send("❌ Lỗi khi xử lý ảnh camera.")
+                                await message.channel.send("❌ Định dạng ảnh không hợp lệ.")
+                        except aiohttp.ClientError:
+                            logger.exception("Lỗi khi tải ảnh Discord")
+                            await message.channel.send("❌ Lỗi khi tải ảnh camera.")
+                        except Exception:
+                            logger.exception("Lỗi khi gửi ảnh Discord")
+                            await message.channel.send("❌ Lỗi khi xử lý ảnh camera.")
 
             # Nếu không có gì trả về
             if not reply_text and not images:
                 await message.reply("⚠️ Không nhận được phản hồi từ hệ thống. Vui lòng thử lại.")
 
-        except requests.exceptions.Timeout:
+        except aiohttp.ServerTimeoutError:
             await message.reply("⏱️ API phản hồi quá lâu, vui lòng thử lại sau!")
-        except requests.exceptions.RequestException as e:
-            logger.exception("Lỗi kết nối API chatbot")
-            await message.reply(f"❌ Lỗi kết nối hệ thống: `{e}`")
         except Exception:
             logger.exception("Lỗi không mong đợi trong Discord bot")
             await message.reply("❌ Có lỗi xảy ra, vui lòng thử lại!")

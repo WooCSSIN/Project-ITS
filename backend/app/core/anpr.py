@@ -212,7 +212,10 @@ class ANPREngine:
 
         try:
             processed = self._preprocess_for_ocr(crop)
-            # EasyOCR expects BGR/RGB image; pass grayscale too (auto-handle)
+            # EasyOCR hoạt động tốt nhất với ảnh 3-channel (BGR/RGB).
+            # _preprocess_for_ocr trả về grayscale 2D → convert lại sang BGR 3-channel
+            if len(processed.shape) == 2:
+                processed = cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
             results = self.reader.readtext(processed)
 
             if not results:

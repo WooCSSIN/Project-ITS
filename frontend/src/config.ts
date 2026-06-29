@@ -14,18 +14,26 @@ class ApiConfig {
 
   get BASE_URL_HTTP() {
     if (this._httpBase) return this._httpBase;
+    // Fallback to backend port if running on Vite dev server without proxy
+    if (typeof window !== "undefined" && window.location.port === "5173") {
+      return "http://localhost:8000";
+    }
     // Relative → dùng origin hiện tại (qua nginx)
     return typeof window !== "undefined" ? window.location.origin : "";
   }
 
   get BASE_URL_WS() {
     if (this._wsBase) return this._wsBase;
+    // Fallback to backend port if running on Vite dev server without proxy
+    if (typeof window !== "undefined" && window.location.port === "5173") {
+      return "ws://localhost:8000";
+    }
     // Tự detect ws:// hoặc wss:// theo protocol hiện tại
     if (typeof window !== "undefined") {
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
       return `${proto}://${window.location.host}`;
     }
-    return "ws://localhost";
+    return "ws://localhost:8000";
   }
 
   // API Prefixes
@@ -183,5 +191,17 @@ export const endpoints = {
     `${apiConfig.API_HTTP_BASE}/admin/traffic/roads/${encodeURIComponent(roadName)}/stop`,
   adminStartRoadProcess: (roadName: string) =>
     `${apiConfig.API_HTTP_BASE}/admin/traffic/roads/${encodeURIComponent(roadName)}/start`,
+  adminViolations: (params?: { page?: number; pageSize?: number; type?: string; status?: string; cameraId?: number }) => {
+    const p = new URLSearchParams();
+    if (params?.page) p.set("page", String(params.page));
+    if (params?.pageSize) p.set("page_size", String(params.pageSize));
+    if (params?.type) p.set("violation_type", params.type);
+    if (params?.status) p.set("status", params.status);
+    if (params?.cameraId !== undefined) p.set("camera_id", String(params.cameraId));
+    return `${apiConfig.API_HTTP_BASE}/admin/violations?${p.toString()}`;
+  },
+  adminViolationStats: `${apiConfig.API_HTTP_BASE}/admin/violations/stats`,
+  adminUpdateViolationStatus: (id: number, newStatus: string) =>
+    `${apiConfig.API_HTTP_BASE}/admin/violations/${id}/status?new_status=${newStatus}`,
 
 };

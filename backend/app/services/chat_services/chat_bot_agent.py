@@ -2,6 +2,7 @@ from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 from uuid import uuid4
+import asyncio
 from services.chat_services.tool_func import get_frame_road, get_info_road, get_roads
 from langchain.agents import AgentState, create_agent
 from langchain.agents.middleware import ModelRequest, before_model, dynamic_prompt
@@ -303,11 +304,19 @@ class ChatBotAgent:
         payload = {"messages": [{"role": "user", "content": user_input}]}
 
         try:
-            response = await run_in_threadpool(
-                self._agent.invoke,
-                payload,
-                config,
+            response = await asyncio.wait_for(
+                run_in_threadpool(
+                    self._agent.invoke,
+                    payload,
+                    config,
+                ),
+                timeout=120.0,  # 2 phút timeout - tránh thread bị treo vô thời hạn
             )
+        except asyncio.TimeoutError:
+            _agent_logger.warning(
+                "AI agent timed out after 120s for thread_id=%s. Returning busy message.", thread_id
+            )
+            raise GenAIUnavailableError("AI phản hồi quá lâu, vui lòng thử lại sau ít phút.")
         except ServerError as exc:
             # Google GenAI 503 error handling
             if hasattr(exc, 'status_code') and exc.status_code == 503:

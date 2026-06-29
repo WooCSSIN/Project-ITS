@@ -14,7 +14,7 @@ type AdminNavItem = {
 
 const adminNavItems: AdminNavItem[] = [
   { to: "/admin/resources", label: "Quản lý tài nguyên", icon: Server },
-  { to: "/admin/roads", label: "Quản lý tuyến đường", icon: Route },
+  { to: "/admin/roads",     label: "Quản lý tuyến đường", icon: Route },
 ];
 
 type AdminLayoutProps = {

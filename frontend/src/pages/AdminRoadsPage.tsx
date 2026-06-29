@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/ui/button";
-import { getApiUrl } from "@/config/settings";
-import { authConfig, endpoints } from "@/config";
+import { endpoints } from "@/config";
+import { useAdminGuard } from "@/hooks/useAdminGuard";
 import AdminLayout from "./AdminLayout";
 import { RefreshCw, Play, Square } from "lucide-react";
 
@@ -16,9 +16,6 @@ type TrafficStatusResponse = {
 };
 
 export default function AdminRoadsPage() {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const [roadStatuses, setRoadStatuses] = useState<
     Record<string, TrafficRoadRuntime>
   >({});
@@ -29,13 +26,8 @@ export default function AdminRoadsPage() {
   const [trafficError, setTrafficError] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  const token = useMemo(
-    () =>
-      typeof window !== "undefined"
-        ? localStorage.getItem(authConfig.TOKEN_KEY)
-        : null,
-    [],
-  );
+  // ── Shared admin auth guard (tránh gọi /auth/me trùng lặp) ──
+  const { isAdmin, loading, error, token } = useAdminGuard();
 
   const fetchTrafficStatuses = async () => {
     if (!token) return;
@@ -97,7 +89,12 @@ export default function AdminRoadsPage() {
         return;
       }
 
+      // Refresh ngay lập tức sau action
       await fetchTrafficStatuses();
+      // Và retry sau 2s để đảm bảo subprocess đã khởi động/dừng hoàn toàn
+      setTimeout(() => {
+        fetchTrafficStatuses();
+      }, 2000);
     } catch {
       setTrafficError("Lỗi kết nối khi thao tác subprocess.");
     } finally {
@@ -108,56 +105,6 @@ export default function AdminRoadsPage() {
       });
     }
   };
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const checkRole = async () => {
-      try {
-        if (!token) {
-          setIsAdmin(false);
-          setError("Chưa đăng nhập");
-          setLoading(false);
-          return;
-        }
-
-        const res = await fetch(getApiUrl("/auth/me"), {
-          headers: { Authorization: `Bearer ${token}` },
-          credentials: "include",
-        });
-
-        if (!res.ok) {
-          setIsAdmin(false);
-          setError(
-            res.status === 401
-              ? "Không có quyền truy cập"
-              : "Không thể xác thực người dùng",
-          );
-          setLoading(false);
-          return;
-        }
-
-        const me = await res.json();
-        if (!cancelled) {
-          const admin = me?.role_id === 0;
-          setIsAdmin(admin);
-          if (!admin) {
-            setError("Bạn không có quyền truy cập trang này");
-          }
-        }
-      } catch {
-        setIsAdmin(false);
-        setError("Lỗi kết nối tới server");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    checkRole();
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
 
   useEffect(() => {
     if (!isAdmin) return;

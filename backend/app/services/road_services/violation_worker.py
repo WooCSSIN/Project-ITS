@@ -169,9 +169,23 @@ async def _run_worker_loop(redis_url: str, queue_key: str, alerts_channel: str, 
                 # Insert DB
                 violation_id = await _insert_violation_row(payload)
                 if violation_id is None:
-                    # Insert fail nhưng KHÔNG requeue để tránh loop vô hạn
-                    # Violation sẽ mất, log warning để admin investigate
-                    logger.warning("Violation dropped due to DB error: %s", payload)
+                    # Insert fail → đẩy vào dead-letter queue thay vì drop hoàn toàn
+                    # Admin có thể retry thủ công sau khi DB phục hồi
+                    try:
+                        dead_letter_key = "violations:dead_letter"
+                        await redis_client.lpush(
+                            dead_letter_key,
+                            json.dumps(payload, ensure_ascii=False, default=str),
+                        )
+                        # Giữ tối đa 500 records trong dead-letter để tránh Redis overflow
+                        await redis_client.ltrim(dead_letter_key, 0, 499)
+                        logger.warning(
+                            "Violation moved to dead-letter queue (DB error): type=%s camera=%s",
+                            payload.get("violation_type"),
+                            payload.get("camera_id"),
+                        )
+                    except Exception as dlq_exc:
+                        logger.exception("Failed to push to dead-letter queue: %s", dlq_exc)
                     continue
 
                 # Publish alert (best-effort)

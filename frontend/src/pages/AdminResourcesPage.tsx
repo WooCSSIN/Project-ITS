@@ -11,8 +11,8 @@ import {
 } from "recharts";
 import { Button } from "@/ui/button";
 import { useWebSocket } from "@/hooks/useWebSocket";
-import { getApiUrl } from "@/config/settings";
-import { authConfig, endpoints } from "@/config";
+import { endpoints } from "@/config";
+import { useAdminGuard } from "@/hooks/useAdminGuard";
 import AdminLayout from "./AdminLayout";
 import { RefreshCw, Cpu, HardDrive, MemoryStick } from "lucide-react";
 
@@ -103,28 +103,22 @@ function ResourceBar({
 
 export default function AdminResourcesPage() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const [history, setHistory] = useState<
     { time: string; cpu: number; mem: number; disk: number }[]
   >([]);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  const token = useMemo(
-    () =>
-      typeof window !== "undefined"
-        ? localStorage.getItem(authConfig.TOKEN_KEY)
-        : null,
-    [],
-  );
+  // ── Shared admin auth guard (tránh gọi /auth/me trùng lặp) ──
+  const { isAdmin, loading, error, token } = useAdminGuard();
 
   const fetchMetrics = async () => {
     if (!token) return;
+    setFetchError(null);
 
     try {
-      const res = await fetch(getApiUrl("/admin/resources"), {
+      const res = await fetch(endpoints.adminResources, {
         headers: { Authorization: `Bearer ${token}` },
         credentials: "include",
       });
@@ -134,66 +128,16 @@ export default function AdminResourcesPage() {
         setMetrics(data);
         setLastUpdate(new Date().toLocaleTimeString("vi-VN"));
       } else if (res.status === 403) {
-        setError("Chỉ admin mới được phép truy cập");
+        setFetchError("Chỉ admin mới được phép truy cập");
       } else if (res.status === 401) {
-        setError("Vui lòng đăng nhập lại");
+        setFetchError("Vui lòng đăng nhập lại");
       } else {
-        setError("Không thể tải dữ liệu hệ thống");
+        setFetchError("Không thể tải dữ liệu hệ thống");
       }
     } catch {
-      setError("Lỗi kết nối tới server");
+      setFetchError("Lỗi kết nối tới server");
     }
   };
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const checkRole = async () => {
-      try {
-        if (!token) {
-          setIsAdmin(false);
-          setError("Chưa đăng nhập");
-          setLoading(false);
-          return;
-        }
-
-        const res = await fetch(getApiUrl("/auth/me"), {
-          headers: { Authorization: `Bearer ${token}` },
-          credentials: "include",
-        });
-
-        if (!res.ok) {
-          setIsAdmin(false);
-          setError(
-            res.status === 401
-              ? "Không có quyền truy cập"
-              : "Không thể xác thực người dùng",
-          );
-          setLoading(false);
-          return;
-        }
-
-        const me = await res.json();
-        if (!cancelled) {
-          const admin = me?.role_id === 0;
-          setIsAdmin(admin);
-          if (!admin) {
-            setError("Bạn không có quyền truy cập trang này");
-          }
-        }
-      } catch {
-        setIsAdmin(false);
-        setError("Lỗi kết nối tới server");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    checkRole();
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -465,10 +409,9 @@ export default function AdminResourcesPage() {
         </div>
 
         {/* ── Error card ─────────────────────────────────── */}
-        {metrics?.error && (
+        {(metrics?.error || fetchError) && (
           <div className="rounded-xl border border-rose-200 dark:border-rose-800/50 bg-rose-50 dark:bg-rose-900/10 p-5 flex items-center gap-4 text-rose-600 dark:text-rose-400 shadow-sm">
-            {/* <AlertTriangle className="h-5 w-5 shrink-0" /> */}
-            <p className="text-sm font-semibold">{metrics.error}</p>
+            <p className="text-sm font-semibold">{fetchError || metrics?.error}</p>
           </div>
         )}
       </div>

@@ -57,6 +57,9 @@ class ViolationEngine:
     # Track lịch sử stationary time cho mỗi track_id
     STATIONARY_HISTORY_MAX = 100  # giữ tối đa 100 track
 
+    # Cooldown time cho mỗi loại vi phạm (giây) - tránh spam
+    VIOLATION_COOLDOWN_SEC = 30.0  # Chỉ tạo 1 violation mỗi 30s cho cùng 1 xe + loại vi phạm
+
     def __init__(
         self,
         camera_id: int,
@@ -89,6 +92,9 @@ class ViolationEngine:
         self._stationary_started: Dict[int, float] = {}
         self._stationary_history: Dict[int, List[float]] = {}
 
+        # Cooldown tracking: {track_id: {violation_type: last_timestamp}}
+        self._last_violation_time: Dict[int, Dict[str, float]] = {}
+
     def set_red_light_status(self, is_on: bool) -> None:
         """Set trạng thái đèn đỏ (từ external camera hoặc manual override)."""
         self.is_red_light_on = bool(is_on)
@@ -111,6 +117,33 @@ class ViolationEngine:
         if polygon is not None and not isinstance(polygon, np.ndarray):
             polygon = np.array(polygon, dtype=np.int32)
         self.zones["no_parking"] = polygon
+
+    def _should_create_violation(self, track_id: int, violation_type: str, timestamp: float) -> bool:
+        """Check xem có nên tạo violation mới không (cooldown debounce).
+
+        Args:
+            track_id: ID của xe.
+            violation_type: Loại vi phạm (speeding, red_light, illegal_parking).
+            timestamp: Unix timestamp hiện tại.
+
+        Returns:
+            True nếu đã qua cooldown time, False nếu chưa.
+        """
+        if track_id not in self._last_violation_time:
+            self._last_violation_time[track_id] = {}
+        
+        last_time = self._last_violation_time[track_id].get(violation_type)
+        if last_time is None:
+            # Chưa có vi phạm loại này cho track_id này → tạo mới
+            self._last_violation_time[track_id][violation_type] = timestamp
+            return True
+        
+        # Kiểm tra cooldown
+        if (timestamp - last_time) >= self.VIOLATION_COOLDOWN_SEC:
+            self._last_violation_time[track_id][violation_type] = timestamp
+            return True
+        
+        return False
 
     def _point_in_zone(self, point: Tuple[int, int], zone: Optional[np.ndarray]) -> bool:
         """Check xem 1 điểm có nằm trong zone polygon không.
@@ -275,34 +308,36 @@ class ViolationEngine:
 
                 # 1. Speeding detection
                 if speed > self.speed_limit_kmh and speed > 0:
-                    violations.append({
-                        "camera_id": self.camera_id,
-                        "violation_type": "speeding",
-                        "vehicle_track_id": track_id,
-                        "license_plate": None,
-                        "confidence": 0.95,
-                        "timestamp": float(timestamp),
-                        "speed_kmh": speed,
-                        "speed_limit_kmh": self.speed_limit_kmh,
-                        "box": box,
-                        "evidence_image_url": None,
-                    })
+                    if self._should_create_violation(track_id, "speeding", timestamp):
+                        violations.append({
+                            "camera_id": self.camera_id,
+                            "violation_type": "speeding",
+                            "vehicle_track_id": track_id,
+                            "license_plate": None,
+                            "confidence": 0.95,
+                            "timestamp": float(timestamp),
+                            "speed_kmh": speed,
+                            "speed_limit_kmh": self.speed_limit_kmh,
+                            "box": box,
+                            "evidence_image_url": None,
+                        })
 
                 # 2. Red light detection
                 if self.is_red_light_on and self.zones["red_light"] is not None:
                     center = self._get_center_box(box)
                     if self._point_in_zone(center, self.zones["red_light"]):
-                        violations.append({
-                            "camera_id": self.camera_id,
-                            "violation_type": "red_light",
-                            "vehicle_track_id": track_id,
-                            "license_plate": None,
-                            "confidence": 0.90,
-                            "timestamp": float(timestamp),
-                            "speed_kmh": speed,
-                            "box": box,
-                            "evidence_image_url": None,
-                        })
+                        if self._should_create_violation(track_id, "red_light", timestamp):
+                            violations.append({
+                                "camera_id": self.camera_id,
+                                "violation_type": "red_light",
+                                "vehicle_track_id": track_id,
+                                "license_plate": None,
+                                "confidence": 0.90,
+                                "timestamp": float(timestamp),
+                                "speed_kmh": speed,
+                                "box": box,
+                                "evidence_image_url": None,
+                            })
 
                 # 3. Illegal parking detection
                 if self.zones["no_parking"] is not None:
@@ -311,17 +346,18 @@ class ViolationEngine:
                     if in_no_parking and speed < self.STATIONARY_SPEED_THRESHOLD:
                         self._update_stationary(track_id, timestamp)
                         if self._is_stationary_long_enough(track_id):
-                            violations.append({
-                                "camera_id": self.camera_id,
-                                "violation_type": "illegal_parking",
-                                "vehicle_track_id": track_id,
-                                "license_plate": None,
-                                "confidence": 0.85,
-                                "timestamp": float(timestamp),
-                                "speed_kmh": speed,
-                                "box": box,
-                                "evidence_image_url": None,
-                            })
+                            if self._should_create_violation(track_id, "illegal_parking", timestamp):
+                                violations.append({
+                                    "camera_id": self.camera_id,
+                                    "violation_type": "illegal_parking",
+                                    "vehicle_track_id": track_id,
+                                    "license_plate": None,
+                                    "confidence": 0.85,
+                                    "timestamp": float(timestamp),
+                                    "speed_kmh": speed,
+                                    "box": box,
+                                    "evidence_image_url": None,
+                                })
                     else:
                         self._stationary_started.pop(track_id, None)
                         self._stationary_history.pop(track_id, None)
@@ -361,11 +397,17 @@ class ViolationEngine:
         for tid in stale:
             self._stationary_started.pop(tid, None)
             self._stationary_history.pop(tid, None)
+        
+        # Cleanup cooldown tracking cho tracks không còn hoạt động
+        stale_cooldown = set(self._last_violation_time.keys()) - active_ids
+        for tid in stale_cooldown:
+            self._last_violation_time.pop(tid, None)
 
     def reset(self) -> None:
         """Reset toàn bộ state (dùng khi reset camera)."""
         self._stationary_started.clear()
         self._stationary_history.clear()
+        self._last_violation_time.clear()
         logger.info("ViolationEngine reset: camera_id=%s", self.camera_id)
 
     def get_stats(self) -> Dict:
