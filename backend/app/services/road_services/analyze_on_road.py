@@ -14,37 +14,31 @@ class AnalyzeOnRoad(AnalyzeOnRoadBase):
     mà chỉ là một chút cải tiến từ code base (class Base) để có thể vừa xử lý video đầu vào ở một process\
     khác vừa có thể truy xuất thông tin về kết quả mà không bị hiện tượng tranh chấp dữ liệu    
     """    
-    def __init__(self, path_video, meter_per_pixel, redis_url, region, model_path = settings_metric_transport.MODELS_PATH, time_step=30,
-                 is_draw=True, device= settings_metric_transport.DEVICE, iou=0.3, conf=0.2, show=True):
-        """Class này kế thừa từ class Base (xử lý tuần tự). Class con này chưa phải là code để multiprocessing\
-        mà chỉ là một chút cải tiến từ code base (class Base) để có thể vừa xử lý video đầu vào ở một process\
-        khác vừa có thể truy xuất thông tin về kết quả mà không bị hiện tượng tranh chấp dữ liệu
+    def __init__(self, path_video, meter_per_pixel, redis_url, region,
+                 model_path=settings_metric_transport.MODELS_PATH, time_step=30,
+                 is_draw=True, device=settings_metric_transport.DEVICE,
+                 iou=None, conf=None, show=True,
+                 infer_every_n_frames=None, frame_size=None):
+        """AnalyzeOnRoad — kế thừa Base, thêm Redis I/O và per-camera detection config.
 
         Args:
-            path_video (str): Đường dẫn đến video
-            meter_per_pixel (float): Tỉ lệ 1 mét ngoài đời với 1 pixel
-            redis_url (str): URL kết nối Redis để chia sẻ dữ liệu realtime và queue lịch sử.
-            model_path (str): Đường dẫn đến model. Defaults to "best.pt".
-            time_step (int): Khoảng thời gian giữa 2 lần cập nhật thông tin các phương tiện. Defaults to 30.
-            is_draw (bool): Biến chỉ định có vẽ các thông tin xử lý được lên frame hay không. Defaults to True.
-            device (str): Dùng GPU hoặc CPU. Defaults to 'cpu'.
-            iou (float): Ngưỡng tin cậy về bounding box . Defaults to 0.3.
-            conf (float): Ngưỡng tin cậy về nhãn được dự đoán. Defaults to 0.2.
-            show (bool): Hiển thị video xử lý qua opencv, đặt là False khi tích làm server tránh lãng phí tài nguyên.\
-            Defaults to True.
-            
-        Examples:`
-        Hướng dẫn chạy xử lý 1 video đơn
-        >>> analyzer = AnalyzeOnRoad(
-        >>>     path_video=path_video,
-        >>>     meter_per_pixel=meter_per_pixel,
-        >>>     redis_url=redis_url,
-        >>>     **kwargs
-        >>> )
-        >>> analyzer.process_on_single_video()
+            path_video: Đường dẫn video / RTSP URL.
+            meter_per_pixel: Tỉ lệ mét/pixel.
+            redis_url: URL Redis.
+            region: ROI polygon numpy array.
+            model_path: Đường dẫn YOLOv8 model.
+            time_step: Chu kỳ cập nhật thống kê (giây).
+            is_draw: Vẽ annotation lên frame.
+            device: 'cpu' hoặc 'cuda'.
+            iou: IoU threshold. None = dùng per-camera config hoặc default.
+            conf: Confidence threshold. None = dùng per-camera config hoặc default.
+            show: Hiển thị cửa sổ OpenCV.
+            infer_every_n_frames: Frame skip. None = dùng per-camera config hoặc default.
+            frame_size: Kích thước resize trước inference. None = dùng per-camera config hoặc default.
         """
         super().__init__(path_video, meter_per_pixel, model_path, time_step,
-                 is_draw, device, iou, conf, show, region)
+                         is_draw, device, iou, conf, show, region,
+                         infer_every_n_frames, frame_size)
         self.redis = redis.Redis.from_url(redis_url)
         self.info_key = f"traffic:road:{self.name}:info"
         self.frame_key = f"traffic:road:{self.name}:frame"

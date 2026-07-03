@@ -156,9 +156,9 @@ class AnalyzeOnRoadBase:
     """
     def __init__(self, path_video = "./video_test/Đường Láng.mp4", meter_per_pixel = 0.06,
                  model_path= settings_metric_transport.MODELS_PATH, time_step=30,
-                 is_draw=True, device= settings_metric_transport.DEVICE, iou=0.3, conf=0.2, show=False,
+                 is_draw=True, device= settings_metric_transport.DEVICE, iou=None, conf=None, show=False,
                  region = np.array([[50, 400], [50, 265], [370, 130], [600, 130], [600, 400]]),
-                 infer_every_n_frames=3):
+                 infer_every_n_frames=None, frame_size=None):
         """Hàm xử lý tuần tự như một Script đơn giản áp dụng YOLO và cải tiến hơn là ở việc gói gọn trong 1 class
 
         Args:
@@ -168,13 +168,32 @@ class AnalyzeOnRoadBase:
             time_step (int): Khoảng thời gian giữa 2 lần cập nhật thông tin các phương tiện. Defaults to 30.
             is_draw (bool): Biến chỉ định có vẽ các thông tin xử lý được lên frame hay không. Defaults to True.
             device (str): Dùng GPU hoặc CPU. Defaults to 'cpu'.
-            iou (float): Ngưỡng tin cậy về bounding box . Defaults to 0.3.
-            conf (float): Ngưỡng tin cậy về nhãn được dự đoán. Defaults to 0.2.
-            show (bool): Hiển thị video xử lý qua opencv, đặt là False khi tích hợp làm server tránh lãng phí tài nguyên.\
-            Defaults to True.
-            infer_every_n_frames (int): Số frame cho mỗi lần infer (ví dụ 5 = 5 frame infer 1 lần).
-            max_buffer_size (int): Kích thước tối đa của buffer cho deque. Defaults to 900.
+            iou (float): Ngưỡng tin cậy về bounding box. None = dùng per-camera override hoặc default.
+            conf (float): Ngưỡng tin cậy về nhãn được dự đoán. None = dùng per-camera override hoặc default.
+            show (bool): Hiển thị video xử lý qua opencv, đặt là False khi tích hợp làm server.
+            infer_every_n_frames (int): Số frame cho mỗi lần infer. None = dùng per-camera override hoặc default.
+            frame_size (tuple): Kích thước frame khi infer. None = dùng per-camera override hoặc default.
         """
+        # ── Resolve per-camera config ────────────────────────────────────────
+        road_name_tmp = os.path.splitext(os.path.basename(path_video))[0]
+        _cam_overrides = getattr(settings_metric_transport, 'CAMERA_OVERRIDES', {}).get(road_name_tmp, {})
+
+        _resolved_conf = conf if conf is not None else _cam_overrides.get(
+            'conf', getattr(settings_metric_transport, 'DEFAULT_CONF', 0.15))
+        _resolved_iou = iou if iou is not None else _cam_overrides.get(
+            'iou', getattr(settings_metric_transport, 'DEFAULT_IOU', 0.3))
+        _resolved_infer_n = infer_every_n_frames if infer_every_n_frames is not None else _cam_overrides.get(
+            'infer_every_n', getattr(settings_metric_transport, 'DEFAULT_INFER_EVERY_N', 2))
+        _resolved_frame_size = frame_size if frame_size is not None else _cam_overrides.get(
+            'frame_size', getattr(settings_metric_transport, 'DEFAULT_FRAME_SIZE', (800, 600)))
+
+        # Store resolved frame size on instance
+        self._frame_size: tuple = _resolved_frame_size
+
+        logger.info(
+            "Camera %s config: conf=%.2f iou=%.2f infer_n=%d frame_size=%s",
+            road_name_tmp, _resolved_conf, _resolved_iou, _resolved_infer_n, _resolved_frame_size,
+        )
         current_dir = os.path.dirname(os.path.abspath(__file__))
         # Giai đoạn 3: Chọn tracker dựa trên config (bytetrack cho CPU, botsort cho GPU)
         tracker_mode = settings_metric_transport.TRACKER_MODE
@@ -191,16 +210,23 @@ class AnalyzeOnRoadBase:
             verbose=False,
             show=False,
             device=device,
-            iou=iou,
-            conf=conf,
+            iou=_resolved_iou,
+            conf=_resolved_conf,
             meter_per_pixel=meter_per_pixel,
-            max_hist=15,  # Tăng từ 5 → 15: lấy trung bình trajectory dài hơn → speed ổn định hơn
+            max_hist=15,
+            region=region.tolist(),  # region gốc (tọa độ full frame) — sẽ bị override khi infer
         )
 
         self.region = region
         self.region_pts = region.reshape((-1, 1, 2))
         # Bounding box (x, y, w, h) for fast pre-filtering before polygon test
         self.region_bbox = cv2.boundingRect(self.region_pts)
+
+        # Pre-compute: polygon dịch về tọa độ crop (trừ bx, by)
+        # Dùng để truyền vào SpeedEstimator khi infer trên crop nhỏ
+        # → YOLO chạy nhẹ hơn, tọa độ vẫn khớp chính xác
+        bx, by, _, _ = self.region_bbox
+        self._region_in_crop = (region - np.array([bx, by])).astype(np.int32)
 
         self.show = show
         self.path_video = path_video
@@ -221,10 +247,16 @@ class AnalyzeOnRoadBase:
         self.time_step = time_step
         self.frame_predict = None
         self.is_draw = is_draw
-        self.infer_every_n_frames = max(1, int(infer_every_n_frames))
+        self.infer_every_n_frames = max(1, int(_resolved_infer_n))
         self.frame_count = 0
         self.delta_time = 0
         self.time_pre_for_fps = datetime.now()
+
+        # --- Adaptive frame skipping ---
+        self._base_infer_every_n = max(1, int(_resolved_infer_n))
+
+        # --- Adaptive resolution flag ---
+        self._cpu_downscaled: bool = False
 
         # Draw
         self.font = cv2.FONT_HERSHEY_SIMPLEX
@@ -245,9 +277,6 @@ class AnalyzeOnRoadBase:
 
         # --- Speed smoother: EMA per track_id ---
         self.speed_smoother = SpeedSmoother(alpha=0.3)
-
-        # --- Adaptive frame skipping ---
-        self._base_infer_every_n = max(1, int(infer_every_n_frames))
 
         # --- FPS tracking thực tế để cập nhật SpeedEstimator ---
         self._actual_fps: float = DEFAULT_FALLBACK_FPS  # Khởi tạo mặc định, sẽ được đo thực tế
@@ -400,10 +429,9 @@ class AnalyzeOnRoadBase:
             frame_input (np.array): Ảnh được đọc từ opencv
         """
         try:
-            # Tránh copy toàn bộ frame, chỉ tạo view
             self.frame_output = frame_input
 
-            # Crop theo bounding rect của polygon trên hệ tọa độ ảnh gốc
+            # Crop theo bounding rect để YOLO xử lý vùng nhỏ hơn → nhẹ CPU
             bx, by, bw, bh = self.region_bbox
             self.frame_predict = self.frame_output[by:by + bh, bx:bx + bw]
 
@@ -415,18 +443,18 @@ class AnalyzeOnRoadBase:
                     res = self.inference_client.get_result(timeout_ms=100)
                     if res:
                         self._apply_server_results(res)
-                    use_local = False # Always disable local if we submitted to server, to avoid ID clashes
-                
+                    use_local = False
+
             if use_local:
-                # Fallback: chạy inference local (như cũ)
+                # TỐI ƯU: crop nhỏ (nhẹ CPU) + region đã dịch tọa độ về crop space
+                # → YOLO thấy đúng polygon, không bị miss xe trong vùng vàng
+                self.speed_tool.region = self._region_in_crop.tolist()
                 self.speed_tool.process(self.frame_predict.copy())
                 self.post_processing()
-            
-            # Vẽ đè lên hình các thông tin
+
             if self.is_draw:
                 self.draw_info_to_frame_output()
 
-            # Cập nhật data
             self.update_data()
 
         except Exception:
@@ -520,16 +548,15 @@ class AnalyzeOnRoadBase:
 
     def post_processing(self):
         if self.speed_tool.track_data is not None:
-            # Batch convert to numpy một lần (giảm nhiều lần truy cập thuộc tính)
             track_data = self.speed_tool.track_data
-            speeds_dict = self.speed_tool.spd  # dict: id -> speed (raw từ SpeedEstimator)
+            # bx, by: offset của crop so với full frame
+            # Cần cộng lại để box tọa độ khớp với frame_output khi vẽ
             bx, by, _, _ = self.region_bbox
 
             raw_ids = getattr(track_data, "id", None)
             raw_classes = getattr(track_data, "cls", None)
             raw_boxes = getattr(track_data, "xyxy", None)
 
-            # Có frame detector có box nhưng tracker chưa gán track id
             if raw_ids is None or raw_classes is None or raw_boxes is None:
                 self.speeds = {}
                 self.ids = np.empty((0,), dtype=np.int32)
@@ -541,26 +568,23 @@ class AnalyzeOnRoadBase:
             classes = raw_classes.cpu().numpy().astype(np.int32)
             boxes = raw_boxes.cpu().numpy().astype(np.int32)
 
-            # Map box từ tọa độ crop rect về tọa độ ảnh gốc
+            # Cộng lại offset: box trong crop space → box trong full frame space
+            # (cần cho draw_info_to_frame_output và ViolationEngine)
             boxes[:, [0, 2]] += bx
             boxes[:, [1, 3]] += by
 
-            # Tính toán tâm box
+            # Tâm box trong full frame space
             cx_arr = (boxes[:, 0] + boxes[:, 2]) / 2.0
             cy_arr = (boxes[:, 1] + boxes[:, 3]) / 2.0
 
-            # Cập nhật FPS thực tế cho tracker theo tốc độ infer
             skip = getattr(self, 'current_skip', 1)
             self.homography_tracker.set_fps(self._actual_fps / skip)
 
-            # Áp dụng SpeedSmoother (EMA) lên homography speeds để giảm jitter
             smoothed_speeds: dict[int, float] = {}
             for i, track_id in enumerate(ids):
-                # Tính tốc độ từ Homography thay vì SpeedEstimator
                 raw_spd = self.homography_tracker.update(int(track_id), cx_arr[i], cy_arr[i])
                 smoothed_speeds[int(track_id)] = self.speed_smoother.update(int(track_id), float(raw_spd))
 
-            # Lưu vào thuộc tính phục vụ vẽ và ViolationEngine
             self.speeds = smoothed_speeds
             self.ids = ids
             self.classes = classes
@@ -686,7 +710,8 @@ class AnalyzeOnRoadBase:
 
         cam = None
         consecutive_failures = 0
-        target_size = (600, 400)
+        # Sử dụng configured frame size từ per-camera config thay vì hardcode (600, 400)
+        _fallback_size = (600, 400)
         # Cờ để worker dừng hẳn (tránh vòng lặp vô hạn khi camera lỗi liên tục)
         should_stop = False
 
@@ -753,6 +778,24 @@ class AnalyzeOnRoadBase:
 
                 # Đọc thành công -> reset bộ đếm lỗi
                 consecutive_failures = 0
+
+                # ── Adaptive frame resolution (Task 3.2 - 3.4) ──────────────
+                try:
+                    _cpu_now = psutil.cpu_percent(interval=None)
+                    if _cpu_now > 80:
+                        target_size = _fallback_size  # downscale dưới áp lực CPU
+                        if not self._cpu_downscaled:
+                            self._cpu_downscaled = True
+                            logger.warning(
+                                "CPU high (%.0f%%), downscaling frame to %s for %s",
+                                _cpu_now, _fallback_size, self.name,
+                            )
+                    else:
+                        target_size = self._frame_size  # dùng configured size
+                        if _cpu_now < 70 and self._cpu_downscaled:
+                            self._cpu_downscaled = False  # reset flag khi CPU ổn định lại
+                except Exception:
+                    target_size = self._frame_size
 
                 cap = cv2.resize(cap, target_size)
 

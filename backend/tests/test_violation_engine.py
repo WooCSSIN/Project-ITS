@@ -242,14 +242,17 @@ class TestViolationEngineStationary:
 
         # Update nhiều frame để vượt STATIONARY_DURATION_SEC
         start_time = 1000.0
+        all_violations = []
         for i in range(35):
             timestamp = start_time + i  # 35 giây
             violations = engine.process_frame_tracking(
                 classes, ids, boxes, speeds, timestamp
             )
+            all_violations.extend(violations)
 
-        # Phải có ít nhất 1 violation illegal_parking
-        assert any(v["violation_type"] == "illegal_parking" for v in violations)
+        # Phải có ít nhất 1 violation illegal_parking trong toàn bộ quá trình
+        # (cooldown ngăn tạo lại sau lần đầu, nên collect tất cả frames)
+        assert any(v["violation_type"] == "illegal_parking" for v in all_violations)
 
     def test_moving_vehicle_no_illegal_parking(self):
         """Xe di chuyển trong vùng cấm → không có illegal_parking violation."""

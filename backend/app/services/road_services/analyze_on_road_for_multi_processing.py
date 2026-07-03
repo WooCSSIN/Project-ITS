@@ -79,6 +79,13 @@ class AnalyzeOnRoadForMultiprocessing():
 
     def _create_process_for_road(self, road_name: str) -> Process:
         cfg = self.road_configs[road_name]
+        # Resolve per-camera overrides để truyền vào subprocess
+        _overrides = getattr(settings_metric_transport, 'CAMERA_OVERRIDES', {}).get(road_name, {})
+        _conf = _overrides.get('conf', getattr(settings_metric_transport, 'DEFAULT_CONF', 0.15))
+        _iou = _overrides.get('iou', getattr(settings_metric_transport, 'DEFAULT_IOU', 0.3))
+        _infer_n = _overrides.get('infer_every_n', getattr(settings_metric_transport, 'DEFAULT_INFER_EVERY_N', 2))
+        _frame_size = _overrides.get('frame_size', getattr(settings_metric_transport, 'DEFAULT_FRAME_SIZE', (800, 600)))
+
         return Process(
             target=self._run_analyze_process,
             args=(
@@ -87,6 +94,10 @@ class AnalyzeOnRoadForMultiprocessing():
                 cfg["meter_per_pixel"],
                 settings_server.REDIS_URL,
                 self.show,
+                _conf,
+                _iou,
+                _infer_n,
+                _frame_size,
             ),
             name=f"traffic-road-{road_name}",
         )
@@ -283,34 +294,25 @@ class AnalyzeOnRoadForMultiprocessing():
     # hàm bình thường bỏ vào để tổ chức code Có thể gọi thông qua class hoặc instance, nhưng không thể truy cập 
     # trực tiếp vào thuộc tính của class hay instance, trừ khi được truyền vào.
     @staticmethod 
-    def _run_analyze_process(region, path_video, meter_per_pixel, redis_url, show):
-        """Hàm chạy trong process riêng, làm hàm kích hoạt cho Multiprocessing. Đặt hàm này là static method vì
-        để tránh việc sử dụng multiprocessing bị lỗi do nó sẽ picke các biến liên quan đến hàm để chuyển dữ liệu
-        sang process con, đặc biệt là self chứa các tool của YOLO và các biến khác không thể picke được do đó 
-        các đối tượng liên quan đến YOLO không picke được ta sẽ đưa nó vào hàm kích hoạt này luôn để khởi tạo
-        và khi gọi kích hoạt nó thì nó sẽ đồng thời được khởi tạo ở process con luôn, đảm bảo tính toàn vẹn dữ liệu
-        Tất nhiên sẽ có nhưunxg thuộc tính khác trong self ko picke được nên ta để static cho an toàn dữ liệu
-        Dùng @staticmethod để tránh pickle cả class instance. Chỉ truyền những tham số cần thiết, 
-        không truyền toàn bộ self
+    def _run_analyze_process(region, path_video, meter_per_pixel, redis_url, show,
+                             conf=None, iou=None, infer_every_n=None, frame_size=None):
+        """Hàm chạy trong process riêng, làm hàm kích hoạt cho Multiprocessing.
         
-        Args:
-            path_video (str): Đường dẫn đến video
-            meter_per_pixel (float): Tỉ lệ 1 mét ngoài đời với 1 pixel
-            info_dict (Manager().dict()): Một dict dùng để chia sẽ giữ liệu trung gian giữa các process với nhau,
-            mặc định là sẽ được truyền tham chiếu và nó sẽ được thay đỏi nếu các process con thay đổi nó cho nên
-            ta có thể truy cập dữ liệu kết quả xử lý ở bên ngoài dễ dàng nhưng phải đảm bảo truy cập an toàn
-            frame_dict (Manager().dict()): Tương tự info_dict nhưng dùng để chứa thông tin ảnh byte code đã được encode
-            do dữ liệu dạng bytecode mà manager không có kiểu này nên ta nó vào một dict trung gian
-            show (bool): Hiển thị video hay không
+        Nhận per-camera detection params để truyền vào AnalyzeOnRoad.
         """
         try:
-            logger.info("Worker started for video=%s", path_video)
+            logger.info("Worker started for video=%s conf=%s iou=%s infer_n=%s frame=%s",
+                        path_video, conf, iou, infer_every_n, frame_size)
             analyzer = AnalyzeOnRoad(
                 path_video=path_video,
                 meter_per_pixel=meter_per_pixel,
                 redis_url=redis_url,
-                show= show, 
-                region= region
+                show=show,
+                region=region,
+                conf=conf,
+                iou=iou,
+                infer_every_n_frames=infer_every_n,
+                frame_size=frame_size,
             )
             analyzer.process_on_single_video()
         except Exception as e:

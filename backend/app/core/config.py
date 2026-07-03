@@ -62,11 +62,32 @@ class SettingServer:
     ACCESS_TOKEN_EXPIRE_DAYS = int(os.getenv("ACCESS_TOKEN_EXPIRE_DAYS"))
 
 class SettingMetricTransport:
+    # ── Default detection parameters (apply to all cameras unless overridden) ──
+    DEFAULT_CONF: float = 0.15           # Lowered from 0.2 → better recall for small vehicles
+    DEFAULT_IOU: float = 0.3
+    DEFAULT_INFER_EVERY_N: int = 2       # Reduced from 3 → more stable tracking
+    DEFAULT_FRAME_SIZE: tuple = (800, 600)  # Increased from 600×400 → better distant vehicle detection
+
+    # ── Per-camera overrides (partial dict — only specify what differs from defaults) ──
+    # Example: {"Ngã Tư Sở": {"conf": 0.20, "frame_size": (640, 360)}}
+    CAMERA_OVERRIDES: dict = {
+        # "Văn Quán":         {"conf": 0.15},
+        # "Nguyễn Văn Trỗi":  {"conf": 0.15},
+        # "Nguyễn Trãi":      {"conf": 0.15},
+        # "Ngã Tư Sở":        {"conf": 0.18, "infer_every_n": 2},
+        # "Đường Láng":       {"conf": 0.15},
+    }
+
     REGIONS = [
+        # 0: Văn Quán
         np.array([[0, 400], [190, 190], [440, 190], [600, 400]]),
+        # 1: Nguyễn Văn Trỗi
         np.array([[0, 400], [120, 190], [480, 190], [600, 400]]),
+        # 2: Nguyễn Trãi
         np.array([[0, 400], [0, 180], [150, 70], [480, 70], [600, 260], [600, 400]]),
+        # 3: Ngã Tư Sở
         np.array([[140, 400], [400, 200], [550, 200], [530, 400]]),
+        # 4: Đường Láng
         np.array([[150, 400], [300, 200], [580, 200], [600, 400]]),
     ]
 
