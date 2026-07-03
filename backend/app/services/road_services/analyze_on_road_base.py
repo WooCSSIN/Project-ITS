@@ -613,9 +613,15 @@ class AnalyzeOnRoadBase:
                 # 50x nhanh hơn khi có nhiều vehicle
                 if len(candidate_idx) > 0:
                     candidate_points = np.column_stack([cx[candidate_idx], cy[candidate_idx]])
-                    # Import lazily để tránh circular import
-                    from utils.polygon_utils import points_in_polygon_fast
-                    in_polygon = points_in_polygon_fast(candidate_points, self.region.reshape(-1, 2))
+                    try:
+                        from utils.polygon_utils import points_in_polygon_fast
+                        in_polygon = points_in_polygon_fast(candidate_points, self.region.reshape(-1, 2))
+                    except ImportError:
+                        # Fallback: dùng cv2.pointPolygonTest nếu polygon_utils chưa available
+                        in_polygon = np.array([
+                            cv2.pointPolygonTest(self.region_pts, (float(cx[i]), float(cy[i])), False) >= 0
+                            for i in candidate_idx
+                        ], dtype=bool)
                     valid_indices = candidate_idx[in_polygon]
                 else:
                     valid_indices = np.empty((0,), dtype=np.int32)
