@@ -65,77 +65,62 @@ class SettingMetricTransport:
     # ── Default detection parameters (apply to all cameras unless overridden) ──
     DEFAULT_CONF: float = 0.15           # Lowered from 0.2 → better recall for small vehicles
     DEFAULT_IOU: float = 0.3
-    DEFAULT_INFER_EVERY_N: int = 2       # Reduced from 3 → more stable tracking
-    DEFAULT_FRAME_SIZE: tuple = (800, 600)  # Increased from 600×400 → better distant vehicle detection
+    DEFAULT_INFER_EVERY_N: int = 4       # Tăng từ 2 → 4: giảm tải CPU khi chạy 5 camera song song
+    DEFAULT_FRAME_SIZE: tuple = (600, 400)  # Giữ 600×400 vì CPU đang 100% với 800×600
 
     # ── Per-camera overrides (partial dict — only specify what differs from defaults) ──
     # Example: {"Ngã Tư Sở": {"conf": 0.20, "frame_size": (640, 360)}}
     CAMERA_OVERRIDES: dict = {
-        # "Văn Quán":         {"conf": 0.15},
-        # "Nguyễn Văn Trỗi":  {"conf": 0.15},
-        # "Nguyễn Trãi":      {"conf": 0.15},
-        # "Ngã Tư Sở":        {"conf": 0.18, "infer_every_n": 2},
-        # "Đường Láng":       {"conf": 0.15},
+        # "Nguyễn Trãi":  {"conf": 0.15},
+        # "Ngã Tư Sở":    {"conf": 0.15},
+        # "Đường Láng":   {"conf": 0.15},
+        # "Văn Phú":      {"conf": 0.15},
     }
 
     REGIONS = [
-        # 0: Văn Quán
-        np.array([[0, 400], [190, 190], [440, 190], [600, 400]]),
-        # 1: Nguyễn Văn Trỗi
-        np.array([[0, 400], [120, 190], [480, 190], [600, 400]]),
-        # 2: Nguyễn Trãi
+        # 0: Nguyễn Trãi
         np.array([[0, 400], [0, 180], [150, 70], [480, 70], [600, 260], [600, 400]]),
-        # 3: Ngã Tư Sở
+        # 1: Ngã Tư Sở
         np.array([[140, 400], [400, 200], [550, 200], [530, 400]]),
-        # 4: Đường Láng
+        # 2: Đường Láng
         np.array([[150, 400], [300, 200], [580, 200], [600, 400]]),
+        # 3: Văn Phú
+        np.array([[0, 400], [0, 220], [600, 180], [600, 400]]),
     ]
 
     PATH_VIDEOS = [
-        os.path.join(BASE_DIR, "video_test", "Văn Quán.mp4"),
-        os.path.join(BASE_DIR, "video_test", "Nguyễn Văn Trỗi.mp4"),
         os.path.join(BASE_DIR, "video_test", "Nguyễn Trãi.mp4"),
         os.path.join(BASE_DIR, "video_test", "Ngã Tư Sở.mp4"),
         os.path.join(BASE_DIR, "video_test", "Đường Láng.mp4"),
+        os.path.join(BASE_DIR, "video_test", "Văn Phú.mp4"),
     ]
 
     METER_PER_PIXELS = [
-                        0.034,
-                        0.036,
-                        0.018,
-                        0.066,
-                        0.029
+                        0.018,   # 0: Nguyễn Trãi
+                        0.066,   # 1: Ngã Tư Sở
+                        0.029,   # 2: Đường Láng
+                        0.036,   # 3: Văn Phú
                         ]
     HOMOGRAPHY_MATRICES = [
-        # Ma trận homography thực tế được tính bằng cv2.getPerspectiveTransform
-        # Source = 4 góc vng ROI (pixel), Dst = tọa độ mét thực tế (top-down)
-        # Các giá trị dst giả định: đường rộng 12m, chiều sâu ~25-35m tính từ góc quan sát
-
-        # 0: Văn Quán  REGION=[[0,400],[190,190],[440,190],[600,400]]
-        cv2.getPerspectiveTransform(
-            np.float32([[0, 400], [190, 190], [440, 190], [600, 400]]),
-            np.float32([[0, 0],   [0, 30],    [12, 30],   [12, 0]])
-        ),
-        # 1: Nguyễn Văn Trỗi  REGION=[[0,400],[120,190],[480,190],[600,400]]
-        cv2.getPerspectiveTransform(
-            np.float32([[0, 400], [120, 190], [480, 190], [600, 400]]),
-            np.float32([[0, 0],   [0, 30],    [12, 30],   [12, 0]])
-        ),
-        # 2: Nguyễn Trãi  REGION=[[0,400],[0,180],[150,70],[480,70],[600,260],[600,400]]
-        # Dùng 4 điểm góc (đầu & cuối)
+        # 0: Nguyễn Trãi
         cv2.getPerspectiveTransform(
             np.float32([[0, 400], [0, 180], [600, 260], [600, 400]]),
             np.float32([[0, 0],   [0, 35],  [12, 35],   [12, 0]])
         ),
-        # 3: Ngã Tư Sở  REGION=[[140,400],[400,200],[550,200],[530,400]]
+        # 1: Ngã Tư Sở
         cv2.getPerspectiveTransform(
             np.float32([[140, 400], [400, 200], [550, 200], [530, 400]]),
             np.float32([[0, 0],     [0, 28],    [10, 28],   [10, 0]])
         ),
-        # 4: Đường Láng  REGION=[[150,400],[300,200],[580,200],[600,400]]
+        # 2: Đường Láng
         cv2.getPerspectiveTransform(
             np.float32([[150, 400], [300, 200], [580, 200], [600, 400]]),
             np.float32([[0, 0],     [0, 30],    [12, 30],   [12, 0]])
+        ),
+        # 3: Văn Phú
+        cv2.getPerspectiveTransform(
+            np.float32([[0, 400], [0, 220], [600, 180], [600, 400]]),
+            np.float32([[0, 0],   [0, 28],  [12, 28],   [12, 0]])
         ),
     ]
     MODELS_PATH = os.path.join(BASE_DIR, 'ai_models', 'model N', 'original model', 'best.pt')
@@ -267,8 +252,7 @@ TRAFFIC_THRESHOLDS: Dict[str, RoadThreshold] = {
     "Đường Láng": {"v": 18, "c1": 12, "c2": 20},
     "Ngã Tư Sở": {"v": 19, "c1": 35, "c2": 47},
     "Nguyễn Trãi": {"v": 18, "c1": 12, "c2": 22},
-    "Văn Quán": {"v": 17, "c1": 8, "c2": 15},
-    "Nguyễn Văn Trỗi": {"v": 18, "c1": 12, "c2": 23},
+    "Văn Phú": {"v": 18, "c1": 12, "c2": 23},
 }
 
 DEFAULT_THRESHOLD: RoadThreshold = {"v": 15, "c1": 15, "c2": 25}
@@ -278,11 +262,10 @@ DEFAULT_THRESHOLD: RoadThreshold = {"v": 15, "c1": 15, "c2": 25}
 # Xe vượt quá ngưỡng này sẽ được ghi nhận vi phạm "speeding"
 # Đặt 0 để tắt kiểm tra tốc độ cho tuyến đường đó
 SPEED_LIMITS: Dict[str, float] = {
-    "Đường Láng":       60.0,  # Đường nội đô, 60 km/h
-    "Ngã Tư Sở":        40.0,  # Giao lộ, giới hạn thấp hơn
-    "Nguyễn Trãi":      60.0,
-    "Văn Quán":         40.0,  # Đường khu dân cư
-    "Nguyễn Văn Trỗi":  60.0,
+    "Đường Láng":  60.0,
+    "Ngã Tư Sở":   40.0,
+    "Nguyễn Trãi": 60.0,
+    "Văn Phú":     40.0,
 }
 
 DEFAULT_SPEED_LIMIT: float = 50.0  # km/h — dùng khi không tìm thấy road name

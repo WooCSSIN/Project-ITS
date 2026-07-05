@@ -62,6 +62,7 @@ type StreamVideoProps = {
 
 const StreamVideo = ({ stream, frame, roadName, className }: StreamVideoProps) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const [fallbackSrc, setFallbackSrc] = useState<string>("");
 
   useEffect(() => {
@@ -70,6 +71,13 @@ const StreamVideo = ({ stream, frame, roadName, className }: StreamVideoProps) =
     if (node.srcObject !== stream) node.srcObject = stream;
     void node.play().catch(() => {});
   }, [stream]);
+
+  // Cập nhật src trực tiếp qua ref thay vì re-render → tránh giật
+  useEffect(() => {
+    if (imgRef.current && frame) {
+      imgRef.current.src = frame;
+    }
+  }, [frame]);
 
   // HTTP polling fallback khi cả WebRTC và WebSocket đều không có
   useEffect(() => {
@@ -83,13 +91,20 @@ const StreamVideo = ({ stream, frame, roadName, className }: StreamVideoProps) =
     return () => clearInterval(interval);
   }, [stream, frame, roadName]);
 
-  if (frame) {
-    return <img src={frame} alt="Traffic stream" className={`${className} object-contain`} />;
+  if (stream) {
+    return <video ref={videoRef} autoPlay playsInline muted className={className} />;
   }
-  if (fallbackSrc) {
-    return <img src={fallbackSrc} alt="Traffic stream" className={`${className} object-contain`} onError={() => {}} />;
-  }
-  return <video ref={videoRef} autoPlay playsInline muted className={className} />;
+
+  // WebSocket frame hoặc fallback — dùng img với ref để update src trực tiếp
+  return (
+    <img
+      ref={imgRef}
+      src={frame || fallbackSrc || ""}
+      alt="Traffic stream"
+      className={`${className} object-contain`}
+      onError={() => {}}
+    />
+  );
 };
 
 const VideoMonitor = ({
@@ -210,8 +225,8 @@ const VideoMonitor = ({
           <div className={`grid gap-3 sm:gap-4 ${isFullscreen ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"}`}>
             {(allowedRoads.length > 0 ? allowedRoads : [1,2,3,4,5]).map((road) => (
               <div key={road} className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-                {/* Shimmer video area */}
-                <div className="aspect-[3/2] bg-gradient-to-r from-gray-200 via-gray-100 to-gray-200 dark:from-gray-800 dark:via-gray-700 dark:to-gray-800 animate-pulse relative overflow-hidden">
+                {/* Shimmer video area — aspect 4:3 */}
+                <div className="aspect-[4/3] bg-gradient-to-r from-gray-200 via-gray-100 to-gray-200 dark:from-gray-800 dark:via-gray-700 dark:to-gray-800 animate-pulse relative overflow-hidden">
                   <div className="absolute inset-0 flex items-center justify-center">
                     <Video className="h-10 w-10 text-gray-300 dark:text-gray-600" />
                   </div>
@@ -298,10 +313,9 @@ const VideoMonitor = ({
                     transition: { duration: 0.3 },
                   }}
                   exit={{ opacity: 0, scale: 0.9 }}
-                  whileHover={{ scale: 1.02 }}
-                  className={`relative overflow-hidden rounded-xl border-2 transition-all duration-300 cursor-pointer inline-block w-full max-w-sm mx-auto ${isSelected
+                  className={`relative overflow-hidden rounded-xl border-2 transition-all duration-300 cursor-pointer w-full ${isSelected
                       ? "border-blue-500 shadow-lg shadow-blue-500/25"
-                      : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
+                      : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 hover:scale-[1.01]"
                     }`}
                   onClick={() => {
                     setModalRoadName(roadName);
@@ -309,13 +323,13 @@ const VideoMonitor = ({
                     if (setSelectedRoad) setSelectedRoad(roadName);
                   }}
                 >
-                  {/* Video Frame (responsive) */}
-                  <div className="relative w-full max-w-sm mx-auto aspect-[3/2] bg-gray-100 dark:bg-gray-800 overflow-hidden">
+                  {/* Video Frame — aspect 4:3 khớp với frame backend (800×600) */}
+                  <div className="relative w-full mx-auto aspect-[4/3] bg-gray-100 dark:bg-gray-800 overflow-hidden">
                     <StreamVideo
                       stream={streamEntry?.stream || null}
                       frame={frameData?.[roadName]?.frame}
                       roadName={roadName}
-                      className="w-full h-full object-contain block"
+                      className="w-full h-full object-cover block"
                     />
 
                     {/* Click to expand hint */}

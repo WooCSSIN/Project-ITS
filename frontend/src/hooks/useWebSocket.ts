@@ -445,33 +445,19 @@ export const useMultipleFrameStreams = (roadNames: string[]) => {
       ws.onopen = () => setConnections((prev) => ({ ...prev, [road]: true }));
       ws.onmessage = (event) => {
         try {
-          // Convert the received binary data to a blob URL
+          // Tạo blob URL từ binary frame
           const blob = new Blob([event.data], { type: "image/jpeg" });
           const imageUrl = URL.createObjectURL(blob);
 
-          if (lastFrameRef.current[road] === imageUrl) {
-            URL.revokeObjectURL(imageUrl); // Clean up unused blob URL
-            return;
+          // Revoke URL cũ TRƯỚC khi set state mới (tránh revoke trong setState)
+          const prevUrl = lastFrameRef.current[road];
+          if (prevUrl) {
+            URL.revokeObjectURL(prevUrl);
           }
-
-          // Clean up the previous blob URL to prevent memory leaks
-          if (lastFrameRef.current[road]) {
-            URL.revokeObjectURL(lastFrameRef.current[road]);
-          }
-
           lastFrameRef.current[road] = imageUrl;
-          setFrameData((prev) => {
-            const prevForRoad = prev[road]?.frame;
-            if (prevForRoad === imageUrl) {
-              URL.revokeObjectURL(imageUrl);
-              return prev;
-            }
-            // Clean up previous blob URL if it exists
-            if (prevForRoad) {
-              URL.revokeObjectURL(prevForRoad);
-            }
-            return { ...prev, [road]: { frame: imageUrl } };
-          });
+
+          // Update state — React sẽ batch nhiều setFrameData liên tiếp
+          setFrameData((prev) => ({ ...prev, [road]: { frame: imageUrl } }));
         } catch (error) {
           console.error("Error processing frame:", error);
         }

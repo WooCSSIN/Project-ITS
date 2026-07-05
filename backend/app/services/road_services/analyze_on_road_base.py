@@ -782,8 +782,8 @@ class AnalyzeOnRoadBase:
                 # ── Adaptive frame resolution (Task 3.2 - 3.4) ──────────────
                 try:
                     _cpu_now = psutil.cpu_percent(interval=None)
-                    if _cpu_now > 80:
-                        target_size = _fallback_size  # downscale dưới áp lực CPU
+                    if _cpu_now > 70:
+                        target_size = _fallback_size  # downscale sớm hơn khi CPU > 70%
                         if not self._cpu_downscaled:
                             self._cpu_downscaled = True
                             logger.warning(
@@ -792,7 +792,7 @@ class AnalyzeOnRoadBase:
                             )
                     else:
                         target_size = self._frame_size  # dùng configured size
-                        if _cpu_now < 70 and self._cpu_downscaled:
+                        if _cpu_now < 55 and self._cpu_downscaled:
                             self._cpu_downscaled = False  # reset flag khi CPU ổn định lại
                 except Exception:
                     target_size = self._frame_size
@@ -802,8 +802,19 @@ class AnalyzeOnRoadBase:
                 if cam is not None and cam.isOpened():
                     vid_fps = cam.get(cv2.CAP_PROP_FPS)
                     if vid_fps > 0 and not is_network_stream:
-                        self._actual_fps = vid_fps
-                        fps = round(vid_fps)
+                        # Giới hạn FPS tối đa 30fps để tránh quá tải CPU
+                        # Video 60fps (Văn Quán) hay 50fps (Nguyễn Văn Trỗi) đọc quá nhanh
+                        capped_fps = min(vid_fps, 30.0)
+                        self._actual_fps = capped_fps
+                        fps = round(capped_fps)
+
+                        # Frame throttle: nếu video FPS > 30, bỏ qua frame dư
+                        # Ví dụ: 60fps → đọc 1 frame, bỏ 1 frame (ratio = 60/30 = 2)
+                        if vid_fps > 30:
+                            skip_ratio = round(vid_fps / 30)
+                            if self.frame_count % skip_ratio != 0:
+                                self.frame_count += 1
+                                continue
                     else:
                         time_now = datetime.now()
                         delta_time = (time_now - self.time_pre_for_fps).total_seconds()

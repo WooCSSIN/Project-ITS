@@ -21,14 +21,21 @@ const ICE_SERVERS: RTCIceServer[] = [
   },
 ];
 
-const waitForIceGatheringComplete = (pc: RTCPeerConnection): Promise<void> => {
+const waitForIceGatheringComplete = (pc: RTCPeerConnection, timeoutMs = 2000): Promise<void> => {
   if (pc.iceGatheringState === "complete") {
     return Promise.resolve();
   }
 
   return new Promise((resolve) => {
+    // Timeout để không block mãi nếu ICE gathering chậm
+    const timer = window.setTimeout(() => {
+      pc.removeEventListener("icegatheringstatechange", onChange);
+      resolve(); // Proceed với candidates hiện có
+    }, timeoutMs);
+
     const onChange = () => {
       if (pc.iceGatheringState === "complete") {
+        window.clearTimeout(timer);
         pc.removeEventListener("icegatheringstatechange", onChange);
         resolve();
       }
@@ -44,6 +51,7 @@ export const useMultipleWebRTCFrameStreams = (roadNames: string[]) => {
 
   const peerConnectionsRef = useRef<Record<string, RTCPeerConnection>>({});
   const reconnectTimersRef = useRef<Record<string, number>>({});
+  const reconnectAttemptsRef = useRef<Record<string, number>>({});  // backoff counter
   const mountedRef = useRef(true);
 
   const clearReconnectTimer = (road: string) => {
@@ -87,10 +95,15 @@ export const useMultipleWebRTCFrameStreams = (roadNames: string[]) => {
       return;
     }
 
+    // Exponential backoff: 1.5s → 3s → 6s → max 15s
+    const attempts = reconnectAttemptsRef.current[road] ?? 0;
+    const delay = Math.min(1500 * Math.pow(1.5, attempts), 15000);
+    reconnectAttemptsRef.current[road] = attempts + 1;
+
     reconnectTimersRef.current[road] = window.setTimeout(() => {
       delete reconnectTimersRef.current[road];
       void connectRoad(road);
-    }, 1500);
+    }, delay);
   };
 
   const connectRoad = async (road: string) => {
@@ -133,6 +146,7 @@ export const useMultipleWebRTCFrameStreams = (roadNames: string[]) => {
       const state = pc.connectionState;
       if (state === "connected") {
         clearReconnectTimer(road);
+        reconnectAttemptsRef.current[road] = 0;  // reset backoff on success
         setConnections((prev) => ({ ...prev, [road]: true }));
         return;
       }

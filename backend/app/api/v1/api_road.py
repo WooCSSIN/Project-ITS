@@ -152,12 +152,15 @@ async def websocket_frames(
 
     await websocket.accept()
     logger.info("frames websocket connected road=%s", road_name)
+    last_frame: bytes | None = None
     try:
         while True:
             frame_bytes = await run_in_threadpool(analyzer.get_frame_road, road_name)
-            if frame_bytes:
+            # Chỉ gửi khi có frame MỚI (khác frame trước) — tránh gửi frame trùng lặp gây giật
+            if frame_bytes and frame_bytes != last_frame:
                 await websocket.send_bytes(frame_bytes)
-            await asyncio.sleep(1 / 12)
+                last_frame = frame_bytes
+            await asyncio.sleep(1 / 15)  # 15fps poll — khớp hơn với tốc độ YOLO thực tế
     except WebSocketDisconnect:
         logger.info("frames websocket disconnected road=%s", road_name)
     except Exception as exc:

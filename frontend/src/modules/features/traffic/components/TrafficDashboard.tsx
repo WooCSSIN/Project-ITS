@@ -85,10 +85,16 @@ const TrafficDashboard = () => {
   const { trafficData, isAnyConnected } = useMultipleTrafficInfo(allowedRoads);
   const { streamData, connections: streamConnections } =
     useMultipleWebRTCFrameStreams(allowedRoads);
-  const { frameData, connections: frameConnections } =
-    useMultipleFrameStreams(allowedRoads);
 
-  // Combine WebRTC + WebSocket frame connections
+  // Chỉ mở WebSocket frame stream cho camera nào WebRTC CHƯA connected
+  // Tránh 2 stream chạy song song trên cùng camera → giật
+  const roadsNeedingWsFallback = allowedRoads.filter(
+    (road) => !streamConnections[road]
+  );
+  const { frameData, connections: frameConnections } =
+    useMultipleFrameStreams(roadsNeedingWsFallback);
+
+  // Combine connections
   const combinedConnections: Record<string, boolean> = {};
   allowedRoads.forEach((road) => {
     combinedConnections[road] = !!(streamConnections[road] || frameConnections[road]);
@@ -100,12 +106,27 @@ const TrafficDashboard = () => {
   useEffect(() => {
     if (allowedRoads.length === 0 || Object.keys(trafficData).length === 0) return;
     allowedRoads.forEach((road: string) => {
-      if (!trafficData[road]) return;
-      const { status } = getTrafficStatus(road);
+      const data = trafficData[road] as TrafficBackendData | undefined;
+      if (!data) return;
+
+      // Tính status trực tiếp trong effect (tránh stale closure từ getTrafficStatus)
+      let status = "unknown";
+      const densityFromBackend = data.density_status;
+      if (densityFromBackend) {
+        if (densityFromBackend === "Tắc nghẽn") status = "congested";
+        else if (densityFromBackend === "Đông đúc") status = "busy";
+        else if (densityFromBackend === "Thông thoáng") status = "clear";
+      } else {
+        const threshold = getThresholdForRoad(road);
+        const total = (data.count_car ?? 0) + (data.count_motor ?? 0);
+        if (total > threshold.c2) status = "congested";
+        else if (total > threshold.c1) status = "busy";
+        else status = "clear";
+      }
+
       const prevStatus = prevStatusesRef.current[road];
       if (prevStatus !== undefined && prevStatus !== status) {
         const timeStr = new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        const data = trafficData[road];
         if (status === "congested") {
           const msg = `Ô tô: ${data.count_car}, Xe máy: ${data.count_motor}. Tốc độ TB: ${((data.speed_car + data.speed_motor) / 2).toFixed(1)} km/h.`;
           toast.error(`🚨 ${road} đang tắc nghẽn!`, { description: msg, duration: 8000 });
@@ -119,10 +140,15 @@ const TrafficDashboard = () => {
           toast.success(`✅ ${road} đã thông thoáng`, { description: msg, duration: 5000 });
           setAlerts((prev) => [{ id: `${road}-${Date.now()}`, roadName: road, message: msg, timestamp: timeStr, type: "clear" }, ...prev.slice(0, 9)]);
         }
+      } else if (prevStatus === undefined && status === "congested") {
+        // Lần đầu tiên nhận data — nếu đã tắc nghẽn ngay thì cảnh báo luôn
+        const timeStr = new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        const msg = `Ô tô: ${data.count_car}, Xe máy: ${data.count_motor}. Tốc độ TB: ${((data.speed_car + data.speed_motor) / 2).toFixed(1)} km/h.`;
+        toast.error(`🚨 ${road} đang tắc nghẽn!`, { description: msg, duration: 8000 });
+        setAlerts((prev) => [{ id: `${road}-${Date.now()}`, roadName: road, message: msg, timestamp: timeStr, type: "congested" }, ...prev.slice(0, 9)]);
       }
       prevStatusesRef.current[road] = status;
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trafficData, allowedRoads]);
 
   const getTrafficStatus = (roadName: string) => {
