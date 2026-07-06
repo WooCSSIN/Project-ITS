@@ -4,12 +4,35 @@ import aiohttp
 import logging
 import os
 from io import BytesIO
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(override=False)
+BASE_DIR = Path(__file__).resolve().parent
+ENV_PATH = BASE_DIR / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=False)
+
+
+def resolve_discord_token() -> str | None:
+    placeholder_values = {
+        "",
+        "your_discord_bot_token",
+        "your_token_here",
+        "điền_token_của_bạn_vào_đây",
+        "your_bot_token",
+    }
+
+    discord_value = os.getenv("DISCORD_BOT_TOKEN", "").strip()
+    if discord_value and discord_value.lower() not in placeholder_values:
+        return discord_value
+
+    bot_value = os.getenv("BOT_TOKEN", "").strip()
+    if bot_value and bot_value.lower() not in placeholder_values:
+        return bot_value
+    return None
+
 
 # ── Cấu hình ──────────────────────────────────────────────────────────────────
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+DISCORD_BOT_TOKEN = resolve_discord_token()
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 CHATBOT_API_URL = f"{API_BASE_URL}/api/v1/chatbot/chat_no_auth"
 
@@ -53,10 +76,21 @@ async def handle_chatbot_interaction(message: discord.Message, user_text: str):
                     async with session.post(
                         CHATBOT_API_URL,
                         json={"message": user_text},
-                        timeout=aiohttp.ClientTimeout(total=60)
+                        timeout=aiohttp.ClientTimeout(total=120)  # Tăng từ 60s → 120s
                     ) as res:
                         res.raise_for_status()
                         data = await res.json()
+                except aiohttp.ServerTimeoutError:
+                    logger.warning("API timeout — thử lại lần 2...")
+                    # Retry 1 lần khi timeout
+                    async with aiohttp.ClientSession() as session2:
+                        async with session2.post(
+                            CHATBOT_API_URL,
+                            json={"message": user_text},
+                            timeout=aiohttp.ClientTimeout(total=120)
+                        ) as res:
+                            res.raise_for_status()
+                            data = await res.json()
                 except aiohttp.ClientError as exc:
                     logger.exception("Lỗi kết nối API chatbot")
                     await message.reply(f"❌ Lỗi kết nối hệ thống: `{exc}`")
@@ -109,7 +143,7 @@ async def handle_chatbot_interaction(message: discord.Message, user_text: str):
                 await message.reply("⚠️ Không nhận được phản hồi từ hệ thống. Vui lòng thử lại.")
 
         except aiohttp.ServerTimeoutError:
-            await message.reply("⏱️ API phản hồi quá lâu, vui lòng thử lại sau!")
+            await message.reply("⏱️ Hệ thống đang bận, vui lòng thử lại sau ít phút!")
         except Exception:
             logger.exception("Lỗi không mong đợi trong Discord bot")
             await message.reply("❌ Có lỗi xảy ra, vui lòng thử lại!")
@@ -191,11 +225,20 @@ async def help_its(ctx: commands.Context):
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     if not DISCORD_BOT_TOKEN:
-        logger.warning("DISCORD_BOT_TOKEN chưa được cấu hình. Discord bot sẽ không khởi động.")
+        logger.error(
+            "Discord bot token chưa được cấu hình đúng. Hãy đặt giá trị thật cho DISCORD_BOT_TOKEN trong %s.",
+            ENV_PATH,
+        )
         return
 
     logger.info("Khởi động Discord bot...")
-    bot.run(DISCORD_BOT_TOKEN)
+    try:
+        bot.run(DISCORD_BOT_TOKEN)
+    except discord.errors.LoginFailure:
+        logger.error(
+            "Đăng nhập Discord thất bại. Token hiện tại không hợp lệ hoặc đã hết hạn. "
+            "Vui lòng tạo lại bot trên Discord Developer Portal và cập nhật DISCORD_BOT_TOKEN."
+        )
 
 
 if __name__ == "__main__":

@@ -350,17 +350,18 @@ export const useMultipleTrafficInfo = (roadNames: string[]) => {
           lastMessageRef.current[road] = event.data;
           const parsed = JSON.parse(event.data);
 
-          // Transform the data to match VehicleData interface
-          const vehicleData: VehicleData = {
+          // Giữ lại density_status và speed_status từ backend (cần cho alert engine)
+          const vehicleData = {
             count_car: parsed.count_car || 0,
             count_motor: parsed.count_motor || 0,
             speed_car: parsed.speed_car || 0,
             speed_motor: parsed.speed_motor || 0,
+            density_status: parsed.density_status,
+            speed_status: parsed.speed_status,
           };
 
           setTrafficData((prev) => {
             const prevForRoad = prev[road];
-            // Cheap stringify compare to guard nested equality
             const prevStr = prevForRoad ? JSON.stringify(prevForRoad) : "";
             const nextStr = JSON.stringify(vehicleData);
             if (prevStr === nextStr) return prev;

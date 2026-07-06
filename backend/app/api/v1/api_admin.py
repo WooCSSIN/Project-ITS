@@ -203,6 +203,35 @@ async def update_violation_status(
     return violation.to_dict()
 
 
+@router.post(
+    path="/traffic/roads/{road_name}/red-light",
+    summary="Set trạng thái đèn đỏ cho camera",
+    description="Admin bật/tắt đèn đỏ thủ công hoặc theo lịch để ViolationEngine phát hiện vi phạm.",
+)
+async def set_red_light(
+    road_name: str,
+    is_red: bool = Query(..., description="True = đèn đỏ, False = đèn xanh"),
+    current_user: User = Depends(get_current_user),
+):
+    _require_admin(current_user)
+
+    analyzer = v1.state.analyzer
+    if analyzer is None:
+        raise HTTPException(status_code=503, detail="Traffic service unavailable.")
+
+    # Tìm violation engine của road này qua subprocess không trực tiếp được
+    # → lưu trạng thái vào Redis để subprocess đọc
+    try:
+        import redis as redis_lib
+        from core.config import settings_server
+        r = redis_lib.Redis.from_url(settings_server.REDIS_URL, decode_responses=True)
+        r.set(f"traffic:road:{road_name}:red_light", "1" if is_red else "0", ex=300)
+        logger.info("Admin user_id=%s set red_light=%s for road=%s", current_user.id, is_red, road_name)
+        return {"ok": True, "road_name": road_name, "is_red": is_red}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get(
     path="/violations/stats",
     summary="Thống kê vi phạm",

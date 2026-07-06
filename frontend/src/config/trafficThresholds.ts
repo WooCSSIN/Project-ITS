@@ -18,31 +18,10 @@ export interface RoadThreshold {
 }
 
 export const TRAFFIC_THRESHOLDS: Record<string, RoadThreshold> = {
-  "Đường Láng": {
-    v: 6,
-    c1: 17,
-    c2: 26,
-  },
-  "Ngã Tư Sở": {
-    v: 17,
-    c1: 45,
-    c2: 57,
-  },
-  "Nguyễn Trãi": {
-    v: 30,
-    c1: 25,
-    c2: 35,
-  },
-  "Văn Quán": {
-    v: 10,
-    c1: 10,
-    c2: 17,
-  },
-  "Nguyễn Văn Trỗi": {
-    v: 13,
-    c1: 18,
-    c2: 26,
-  },
+  "Đường Láng": { v: 18, c1: 8,  c2: 15 },
+  "Ngã Tư Sở":  { v: 15, c1: 10, c2: 18 },
+  "Nguyễn Trãi":{ v: 15, c1: 5,  c2: 10 },
+  "Văn Phú":    { v: 15, c1: 5,  c2: 10 },
 };
 
 /**

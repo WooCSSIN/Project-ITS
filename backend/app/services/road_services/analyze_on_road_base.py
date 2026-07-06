@@ -345,6 +345,10 @@ class AnalyzeOnRoadBase:
         except Exception as exc:
             logger.warning("Failed to init ViolationEngine for %s: %s", self.name, exc)
 
+        # --- Red light sync counter --- check Redis every N frames
+        self._red_light_check_counter = 0
+        self._RED_LIGHT_CHECK_EVERY = 30  # check Redis mỗi 30 frame (~1s ở 30fps)
+
     @abstractmethod
     def update_for_frame(self):
         pass
@@ -358,19 +362,14 @@ class AnalyzeOnRoadBase:
         pass
 
     def _get_adaptive_skip_factor(self) -> int:
-        """Tự động điều chỉnh số frame bỏ qua dựa trên CPU load hiện tại.
-
-        Khi CPU quá tải → tăng skip để giữ responsiveness của server.
-        Khi CPU nhàn → dùng skip mặc định để tăng chất lượng tracking.
-
-        Returns:
-            int: Số frame skip (cao hơn = ít inference hơn = nhẹ hơn)
-        """
+        """Tự động điều chỉnh số frame bỏ qua dựa trên CPU load hiện tại."""
         try:
-            cpu = psutil.cpu_percent(interval=None)  # Non-blocking, dùng cached value
-            if cpu > 85:
-                return min(self._base_infer_every_n + 2, 6)  # Max skip = 6
-            elif cpu > 70:
+            cpu = psutil.cpu_percent(interval=None)
+            if cpu > 75:
+                return min(self._base_infer_every_n + 3, 8)  # max skip = 8 khi CPU rất cao
+            elif cpu > 60:
+                return min(self._base_infer_every_n + 2, 7)
+            elif cpu > 50:
                 return self._base_infer_every_n + 1
         except Exception:
             pass
@@ -594,6 +593,20 @@ class AnalyzeOnRoadBase:
 
             # --- Violation Detection ---
             if self.violation_engine is not None:
+                # Sync trạng thái đèn đỏ từ Redis mỗi 30 frame (không check mỗi frame)
+                self._red_light_check_counter += 1
+                if self._red_light_check_counter >= self._RED_LIGHT_CHECK_EVERY:
+                    self._red_light_check_counter = 0
+                    try:
+                        # Đọc từ Redis nếu có (thông qua AnalyzeOnRoad.redis)
+                        if hasattr(self, 'redis'):
+                            key = f"traffic:road:{self.name}:red_light"
+                            val = self.redis.get(key)
+                            if val is not None:
+                                self.violation_engine.set_red_light_status(val == b"1" or val == "1")
+                    except Exception:
+                        pass
+
                 violations = self.violation_engine.process_frame_tracking(
                     classes=classes,
                     ids=ids,
@@ -783,7 +796,7 @@ class AnalyzeOnRoadBase:
                 try:
                     _cpu_now = psutil.cpu_percent(interval=None)
                     if _cpu_now > 70:
-                        target_size = _fallback_size  # downscale sớm hơn khi CPU > 70%
+                        target_size = _fallback_size  # downscale khi CPU > 70%
                         if not self._cpu_downscaled:
                             self._cpu_downscaled = True
                             logger.warning(
@@ -791,9 +804,9 @@ class AnalyzeOnRoadBase:
                                 _cpu_now, _fallback_size, self.name,
                             )
                     else:
-                        target_size = self._frame_size  # dùng configured size
+                        target_size = self._frame_size
                         if _cpu_now < 55 and self._cpu_downscaled:
-                            self._cpu_downscaled = False  # reset flag khi CPU ổn định lại
+                            self._cpu_downscaled = False
                 except Exception:
                     target_size = self._frame_size
 

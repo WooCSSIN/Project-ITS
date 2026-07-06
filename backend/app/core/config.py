@@ -63,10 +63,10 @@ class SettingServer:
 
 class SettingMetricTransport:
     # ── Default detection parameters (apply to all cameras unless overridden) ──
-    DEFAULT_CONF: float = 0.15           # Lowered from 0.2 → better recall for small vehicles
+    DEFAULT_CONF: float = 0.15
     DEFAULT_IOU: float = 0.3
-    DEFAULT_INFER_EVERY_N: int = 4       # Tăng từ 2 → 4: giảm tải CPU khi chạy 5 camera song song
-    DEFAULT_FRAME_SIZE: tuple = (600, 400)  # Giữ 600×400 vì CPU đang 100% với 800×600
+    DEFAULT_INFER_EVERY_N: int = 5       # Tăng từ 4 → 5: giảm CPU thêm ~20%
+    DEFAULT_FRAME_SIZE: tuple = (600, 400)
 
     # ── Per-camera overrides (partial dict — only specify what differs from defaults) ──
     # Example: {"Ngã Tư Sở": {"conf": 0.20, "frame_size": (640, 360)}}
@@ -96,31 +96,37 @@ class SettingMetricTransport:
     ]
 
     METER_PER_PIXELS = [
-                        0.018,   # 0: Nguyễn Trãi
-                        0.066,   # 1: Ngã Tư Sở
-                        0.029,   # 2: Đường Láng
-                        0.036,   # 3: Văn Phú
+                        0.020,   # 0: Nguyễn Trãi — đường 6 làn ~24m, camera nhìn từ trên
+                        0.055,   # 1: Ngã Tư Sở — giao lộ rộng ~18m, ROI nhỏ hơn
+                        0.025,   # 2: Đường Láng — đường 4 làn ~16m
+                        0.030,   # 3: Văn Phú — đường khu dân cư ~12m
                         ]
     HOMOGRAPHY_MATRICES = [
-        # 0: Nguyễn Trãi
+        # 0: Nguyễn Trãi — đường 6 làn, rộng ~24m, camera overhead
+        # ROI: [[0,400],[0,180],[150,70],[480,70],[600,260],[600,400]]
+        # Dùng 4 góc đại diện, dst = thực tế ~24m rộng, ~35m sâu
         cv2.getPerspectiveTransform(
             np.float32([[0, 400], [0, 180], [600, 260], [600, 400]]),
-            np.float32([[0, 0],   [0, 35],  [12, 35],   [12, 0]])
+            np.float32([[0, 0],   [0, 35],  [24, 35],   [24, 0]])
         ),
-        # 1: Ngã Tư Sở
+        # 1: Ngã Tư Sở — giao lộ, camera góc cao nhìn chéo
+        # ROI: [[140,400],[400,200],[550,200],[530,400]]
+        # dst ~18m rộng, ~28m sâu
         cv2.getPerspectiveTransform(
             np.float32([[140, 400], [400, 200], [550, 200], [530, 400]]),
-            np.float32([[0, 0],     [0, 28],    [10, 28],   [10, 0]])
+            np.float32([[0, 0],     [0, 28],    [18, 28],   [18, 0]])
         ),
-        # 2: Đường Láng
+        # 2: Đường Láng — đường 4 làn, rộng ~16m
+        # ROI: [[150,400],[300,200],[580,200],[600,400]]
         cv2.getPerspectiveTransform(
             np.float32([[150, 400], [300, 200], [580, 200], [600, 400]]),
-            np.float32([[0, 0],     [0, 30],    [12, 30],   [12, 0]])
+            np.float32([[0, 0],     [0, 30],    [16, 30],   [16, 0]])
         ),
-        # 3: Văn Phú
+        # 3: Văn Phú — đường khu dân cư, rộng ~12m
+        # ROI: [[0,400],[0,220],[600,180],[600,400]]
         cv2.getPerspectiveTransform(
             np.float32([[0, 400], [0, 220], [600, 180], [600, 400]]),
-            np.float32([[0, 0],   [0, 28],  [12, 28],   [12, 0]])
+            np.float32([[0, 0],   [0, 25],  [12, 25],   [12, 0]])
         ),
     ]
     MODELS_PATH = os.path.join(BASE_DIR, 'ai_models', 'model N', 'original model', 'best.pt')
@@ -249,10 +255,10 @@ class RoadThreshold(TypedDict):
 
 
 TRAFFIC_THRESHOLDS: Dict[str, RoadThreshold] = {
-    "Đường Láng": {"v": 18, "c1": 12, "c2": 20},
-    "Ngã Tư Sở": {"v": 19, "c1": 35, "c2": 47},
-    "Nguyễn Trãi": {"v": 18, "c1": 12, "c2": 22},
-    "Văn Phú": {"v": 18, "c1": 12, "c2": 23},
+    "Đường Láng":    {"v": 18, "c1": 8,  "c2": 15},   # Hạ từ 12/20
+    "Ngã Tư Sở":     {"v": 15, "c1": 10, "c2": 18},   # Hạ từ 35/47 — video test ít xe hơn thực
+    "Nguyễn Trãi":   {"v": 15, "c1": 5,  "c2": 10},   # Hạ từ 12/22
+    "Văn Phú":       {"v": 15, "c1": 5,  "c2": 10},   # Hạ từ 12/23
 }
 
 DEFAULT_THRESHOLD: RoadThreshold = {"v": 15, "c1": 15, "c2": 25}

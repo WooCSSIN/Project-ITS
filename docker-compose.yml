@@ -112,8 +112,8 @@ services:
       MINIO_PUBLIC_SCHEME: http
       CHAT_MEMORY_DB_URI: "postgresql://postgres:Traffic@123@database:5432/transportation_system"
       API_BASE_URL: "http://localhost:8000"
-      BATCH_INFERENCE_ENABLED: "true"
-      GPU_ENABLED: "${GPU_ENABLED:-true}"
+      BATCH_INFERENCE_ENABLED: "false"
+      GPU_ENABLED: "${GPU_ENABLED:-false}"
       # Cấu hình logging
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       LOG_TO_CONSOLE: "${LOG_TO_CONSOLE:-false}"
