@@ -14,6 +14,17 @@ dist
 dist-ssr
 *.local
 
+# Video files — quá lớn cho GitHub (>100MB), lưu local hoặc dùng Google Drive
+*.mp4
+*.avi
+*.mov
+*.mkv
+video/
+backend/app/video_test/
+# Debug files
+poly_*.jpg
+debug_*.jpg
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
